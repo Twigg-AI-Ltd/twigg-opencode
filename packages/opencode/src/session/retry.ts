@@ -83,6 +83,9 @@ function exponential(attempt: number, random: number) {
 }
 
 export function retryable(error: Err, provider: string) {
+  // The Twigg runtime decides itself: only a request that failed before its run started can be posted again.
+  if (provider === "twigg")
+    return SessionV1.APIError.isInstance(error) && error.data.isRetryable ? { message: error.data.message } : undefined
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.APIError.isInstance(error)) {

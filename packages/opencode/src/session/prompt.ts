@@ -1283,6 +1283,8 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
+              history: msgs,
+              assistantID: msg.id,
             })
 
             if (structured !== undefined) {

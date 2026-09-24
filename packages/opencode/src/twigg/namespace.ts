@@ -1,15 +1,35 @@
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
+import { Effect } from "effect"
+import path from "path"
 
 const SEGMENT = /^[a-z0-9_-]+$/
 const MAX_SEGMENT_BYTES = 64
 const MAX_BYTES = 255
 
+// Interim root (user, 2026-09-24). The profile segment is this machine's install ID until profiles and device IDs are
+// defined, so every namespace currently reads twigg-code/<install-id>/...
+export const ROOT = "twigg-code"
+
 // Twigg namespaces are immutable per chat and a typo silently falls back to the org defaults, so every namespace we
 // build must already be valid rather than relying on the server to reject it.
 export function namespaceFor(input: { projectID: string; directory: string; profile: string; device: string }) {
-  if (input.projectID !== "global") return ["oc", segment(input.profile), "p", segment(input.projectID)].join("/")
-  return ["oc", segment(input.profile), "d", segment(input.device), directorySegment(input.directory)].join("/")
+  if (input.projectID !== "global") return [ROOT, segment(input.profile), "p", segment(input.projectID)].join("/")
+  return [ROOT, segment(input.profile), "d", segment(input.device), directorySegment(input.directory)].join("/")
 }
+
+// A random UUID, created on first use and kept in the state directory. It must stay stable: every chat and published
+// instruction lives under it.
+export const installID = Effect.fn("TwiggNamespace.installID")(function* () {
+  const fs = yield* FSUtil.Service
+  const file = path.join(Global.Path.state, "twigg-install-id")
+  const existing = (yield* fs.readFileStringSafe(file).pipe(Effect.orDie))?.trim()
+  if (existing && SEGMENT.test(existing)) return existing
+  const id = crypto.randomUUID()
+  yield* fs.writeWithDirs(file, id).pipe(Effect.orDie)
+  return id
+})
 
 // Lowercases and replaces anything outside [a-z0-9_-] with "-", so the result is always a valid segment.
 export function segment(input: string) {

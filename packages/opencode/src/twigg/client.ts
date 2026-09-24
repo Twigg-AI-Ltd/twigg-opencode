@@ -125,6 +125,49 @@ export const Event = Schema.Union([
 ])
 export type Event = typeof Event.Type
 
+export const Chat = Schema.Struct({ id: Schema.String, namespace: Schema.NullOr(Schema.String) })
+
+// GET /runs/{id}. The manifest and timing fields are left out; nothing reads them yet.
+export const Run = Schema.Struct({
+  id: Schema.String,
+  status: Schema.Literals(["running", "succeeded", "failed", "cancelled"]),
+  error: Schema.NullOr(Schema.String),
+  cost: Schema.NullOr(Schema.String),
+  usage: Schema.NullOr(Usage),
+})
+export type Run = typeof Run.Type
+
+// One ledger row from GET /chats/{id}/history. Tool-call `arguments` is a JSON string.
+export const HistoryRow = Schema.Struct({
+  ordinal: Schema.Number,
+  role: Schema.String,
+  part: Schema.Union([
+    Schema.Struct({ type: Schema.Literal("prompt"), text: Schema.String }),
+    Schema.Struct({
+      type: Schema.Literal("tool_result"),
+      tool_use_id: Schema.String,
+      tool_name: Schema.String,
+      text: Schema.String,
+      is_error: Schema.Boolean,
+    }),
+    Schema.Struct({
+      type: Schema.Literal("message"),
+      text: Schema.String,
+      refusal: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+    Schema.Struct({ type: Schema.Literal("reasoning"), text: Schema.String }),
+    Schema.Struct({
+      type: Schema.Literal("tool_call"),
+      tool_use_id: Schema.String,
+      tool_name: Schema.String,
+      arguments: Schema.String,
+    }),
+  ]),
+})
+export type HistoryRow = typeof HistoryRow.Type
+
+export const HistoryPage = Schema.Struct({ data: Schema.Array(HistoryRow), has_more: Schema.Boolean })
+
 const EVENTS = new Set<string>(Event.members.map((member) => member.fields.event.literal))
 const decodeEvent = Schema.decodeUnknownEffect(Event)
 const decodeError = Schema.decodeUnknownEffect(Schema.fromJsonString(ErrorBody))

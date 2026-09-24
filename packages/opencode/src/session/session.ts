@@ -385,21 +385,25 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
       ? input.model.cost.experimentalOver200K
       : input.model.cost)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
+  // Twigg reports what it billed as a decimal string. Null means not settled yet, so fall back to the rates.
+  const twiggCost = input.metadata?.["twigg"]?.["cost"]
   return {
     cost:
-      typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0
-        ? new Decimal(totalNanoAiu).div(100_000_000_000).toNumber()
-        : safe(
-            new Decimal(0)
-              .add(new Decimal(tokens.input).mul(finite(costInfo?.input ?? 0)).div(1_000_000))
-              .add(new Decimal(tokens.output).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
-              .add(new Decimal(tokens.cache.read).mul(finite(costInfo?.cache?.read ?? 0)).div(1_000_000))
-              .add(new Decimal(tokens.cache.write).mul(finite(costInfo?.cache?.write ?? 0)).div(1_000_000))
-              // TODO: update models.dev to have better pricing model, for now:
-              // charge reasoning tokens at the same rate as output tokens
-              .add(new Decimal(tokens.reasoning).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
-              .toNumber(),
-          ),
+      typeof twiggCost === "string" && Number.isFinite(Number(twiggCost)) && Number(twiggCost) >= 0
+        ? Number(twiggCost)
+        : typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0
+          ? new Decimal(totalNanoAiu).div(100_000_000_000).toNumber()
+          : safe(
+              new Decimal(0)
+                .add(new Decimal(tokens.input).mul(finite(costInfo?.input ?? 0)).div(1_000_000))
+                .add(new Decimal(tokens.output).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
+                .add(new Decimal(tokens.cache.read).mul(finite(costInfo?.cache?.read ?? 0)).div(1_000_000))
+                .add(new Decimal(tokens.cache.write).mul(finite(costInfo?.cache?.write ?? 0)).div(1_000_000))
+                // TODO: update models.dev to have better pricing model, for now:
+                // charge reasoning tokens at the same rate as output tokens
+                .add(new Decimal(tokens.reasoning).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
+                .toNumber(),
+            ),
     tokens,
   }
 }

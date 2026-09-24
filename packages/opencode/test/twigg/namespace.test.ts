@@ -10,7 +10,7 @@ describe("twigg namespace", () => {
         profile: "matti",
         device: "laptop",
       }),
-    ).toBe("oc/matti/p/4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+    ).toBe("twigg-code/matti/p/4b825dc642cb6eb9a060e54bf8d69288fbee4904")
   })
 
   test("folder without git uses device and one directory segment", () => {
@@ -20,7 +20,7 @@ describe("twigg namespace", () => {
       profile: "matti",
       device: "Matti's MacBook.local",
     })
-    expect(namespace).toMatch(/^oc\/matti\/d\/matti-s-macbook-local\/home-matti-my-notes-[0-9a-f]{8}$/)
+    expect(namespace).toMatch(/^twigg-code\/matti\/d\/matti-s-macbook-local\/home-matti-my-notes-[0-9a-f]{8}$/)
     expect(TwiggNamespace.validate(namespace)).toBeUndefined()
   })
 

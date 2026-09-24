@@ -621,6 +621,9 @@ export function fromError(
       ).toObject()
     case OutputLengthError.isInstance(e):
       return e
+    // Already classified, e.g. by the Twigg runtime, which knows whether a retry is safe.
+    case APIError.isInstance(e):
+      return e
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(
         {

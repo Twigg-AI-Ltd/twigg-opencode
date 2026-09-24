@@ -29,6 +29,14 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { Session } from "./session"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
+import { HttpClient } from "effect/unstable/http"
+import { TwiggClient } from "@/twigg/client"
+import { TwiggModels } from "@/twigg/models"
+import { TwiggRuntime } from "@/twigg/runtime"
+import os from "os"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +53,10 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  // Set by the session loop. The Twigg runtime sends only what's new since its cursor, so it needs the local messages
+  // (with their IDs) and the assistant message being filled. Calls without them are side calls.
+  history?: SessionV1.WithParts[]
+  assistantID?: string
 }
 
 export type StreamRequest = StreamInput & {
@@ -70,6 +82,9 @@ const live: Layer.Layer<
   | EventV2Bridge.Service
   | LLMClientService
   | RuntimeFlags.Service
+  | Session.Service
+  | FSUtil.Service
+  | HttpClient.HttpClient
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -81,6 +96,63 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
+    const fs = yield* FSUtil.Service
+    const http = yield* HttpClient.HttpClient
+
+    // Twigg keeps the conversation server-side, so it skips the AI SDK entirely (getLanguage refuses twigg models).
+    const twigg = Effect.fn("LLM.twigg")(function* (input: StreamRequest) {
+      const [cfg, item, info] = yield* Effect.all(
+        [config.get(), provider.getProvider(input.model.providerID), auth.get(input.model.providerID)],
+        { concurrency: "unbounded" },
+      )
+      const prepared = yield* LLMRequestPrep.prepare({
+        ...input,
+        provider: item,
+        auth: info,
+        plugin,
+        flags,
+        isWorkflow: false,
+      })
+      if (!item.key) return yield* Effect.die(new Error(`Set ${TwiggModels.ENV_KEY} or log in to Twigg first`))
+      const settings = {
+        baseURL: typeof item.options.baseURL === "string" ? item.options.baseURL : TwiggClient.DEFAULT_BASE_URL,
+        apiKey: item.key,
+      }
+      const variant = input.user.model.variant ? input.model.variants?.[input.user.model.variant] : undefined
+      const stream =
+        input.small || !input.history || !input.assistantID
+          ? TwiggRuntime.respond({
+              settings,
+              model: input.model,
+              system: prepared.system,
+              messages: input.messages,
+              maxTokens: prepared.params.maxOutputTokens,
+            })
+          : TwiggRuntime.stream({
+              settings,
+              model: input.model,
+              assistantID: input.assistantID,
+              history: input.history,
+              tools: prepared.tools,
+              messages: input.messages,
+              maxTokens: prepared.params.maxOutputTokens,
+              reasoningEffort: typeof variant?.reasoning_effort === "string" ? variant.reasoning_effort : undefined,
+              abort: input.abort,
+              chat: yield* TwiggRuntime.sessionChat({
+                sessionID: SessionID.make(input.sessionID),
+                parentSessionID: input.parentSessionID ? SessionID.make(input.parentSessionID) : undefined,
+                agent: input.agent.name,
+                device: cfg.twigg?.device ?? os.hostname(),
+              }).pipe(Effect.provideService(Session.Service, sessions), Effect.provideService(FSUtil.Service, fs)),
+            })
+      yield* Effect.logInfo("llm runtime selected", {
+        "llm.runtime": "twigg",
+        "llm.provider": input.model.providerID,
+        "llm.model": input.model.id,
+      })
+      return { type: "native" as const, stream: stream.pipe(Stream.provideService(HttpClient.HttpClient, http)) }
+    })
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       yield* Effect.logInfo("stream", {
@@ -91,6 +163,8 @@ const live: Layer.Layer<
         agent: input.agent.name,
         mode: input.agent.mode,
       })
+
+      if (input.model.providerID === TwiggModels.PROVIDER_ID) return yield* twigg(input)
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
@@ -398,6 +472,9 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     llmClient,
     RuntimeFlags.node,
+    Session.node,
+    FSUtil.node,
+    httpClient,
   ],
 })
 
