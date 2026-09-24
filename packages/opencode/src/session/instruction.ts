@@ -35,6 +35,8 @@ export interface Interface {
   readonly clear: (messageID: MessageID) => Effect.Effect<void>
   readonly systemPaths: () => Effect.Effect<Set<string>, FSUtil.Error>
   readonly system: () => Effect.Effect<string[], FSUtil.Error>
+  // The same instructions as `system`, split into the user's global file and everything scoped to the project.
+  readonly levels: () => Effect.Effect<{ global: string[]; project: string[] }, FSUtil.Error>
   readonly find: (dir: string) => Effect.Effect<string | undefined, FSUtil.Error>
   readonly resolve: (
     messages: SessionV1.WithParts[],
@@ -152,20 +154,32 @@ const layer: Layer.Layer<
       return paths
     })
 
-    const system = Effect.fn("Instruction.system")(function* () {
+    const levels = Effect.fn("Instruction.levels")(function* () {
       const config = yield* cfg.get()
-      const paths = yield* systemPaths()
+      const paths = Array.from(yield* systemPaths())
       const urls = (config.instructions ?? []).filter(
         (item) => item.startsWith("https://") || item.startsWith("http://"),
       )
 
-      const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
+      const files = yield* Effect.forEach(paths, read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
+      const globals = new Set(globalFiles.map((file) => path.resolve(file)))
+      const blocks = paths.flatMap((item, i) =>
+        files[i] ? [{ global: globals.has(item), text: `Instructions from: ${item}\n${files[i]}` }] : [],
+      )
 
-      return [
-        ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
-        ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
-      ]
+      return {
+        global: blocks.filter((block) => block.global).map((block) => block.text),
+        project: [
+          ...blocks.filter((block) => !block.global).map((block) => block.text),
+          ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
+        ],
+      }
+    })
+
+    const system = Effect.fn("Instruction.system")(function* () {
+      const split = yield* levels()
+      return [...split.global, ...split.project]
     })
 
     const find = Effect.fn("Instruction.find")(function* (dir: string) {
@@ -220,7 +234,7 @@ const layer: Layer.Layer<
       return results
     })
 
-    return Service.of({ clear, systemPaths, system, find, resolve })
+    return Service.of({ clear, systemPaths, system, levels, find, resolve })
   }),
 )
 

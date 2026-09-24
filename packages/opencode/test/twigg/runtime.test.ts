@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { LLMEvent } from "@opencode-ai/llm"
 import { jsonSchema, tool } from "ai"
-import { Effect, Layer, Stream } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Effect, Layer, Option, Stream } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse, UrlParams } from "effect/unstable/http"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { TwiggClient } from "../../src/twigg/client"
+import { TwiggInstructions } from "../../src/twigg/instructions"
 import { TwiggModels } from "../../src/twigg/models"
 import { TwiggRuntime } from "../../src/twigg/runtime"
 import { it } from "../lib/effect"
@@ -26,15 +27,27 @@ const usage = { input_tokens: 10, output_tokens: 5, reasoning_tokens: 2, cache_r
 type Route = (request: HttpClientRequest.HttpClientRequest, body: unknown) => Response | undefined
 
 // A scripted Twigg: each route answers once, in order, for its "METHOD /path".
-function twigg(script: Record<string, Array<Response | Route>>) {
+// A scripted Twigg: each route answers once, in order, for its "METHOD /path". Instruction config is a small
+// in-memory store, kept out of `requests` and recorded in `config`.
+function twigg(
+  script: Record<string, Array<Response | Route>>,
+  active: Record<string, { mode: string; body: string }> = {},
+) {
   const requests: Array<{ key: string; body: unknown }> = []
+  const config: string[] = []
   const layer = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
       Effect.sync(() => {
-        const key = `${request.method} ${new URL(request.url).pathname.replace("/api/v1", "")}`
+        const url = new URL(request.url)
+        const key = `${request.method} ${url.pathname.replace("/api/v1", "")}`
         const body =
           request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined
+        if (key.includes("/config/instructions")) {
+          // Query parameters live on the request, not in its URL.
+          const namespace = Option.getOrElse(UrlParams.getFirst(request.urlParams, "namespace"), () => "")
+          return HttpClientResponse.fromWeb(request, instructions(key, namespace, body, active, config))
+        }
         requests.push({ key, body })
         const next = script[key]?.shift()
         const response = typeof next === "function" ? next(request, body) : next
@@ -45,7 +58,31 @@ function twigg(script: Record<string, Array<Response | Route>>) {
       }),
     ),
   )
-  return { layer, requests }
+  return { layer, requests, config, active }
+}
+
+function instructions(
+  key: string,
+  namespace: string,
+  body: unknown,
+  active: Record<string, { mode: string; body: string }>,
+  log: string[],
+) {
+  if (key === "GET /config/instructions")
+    return Response.json(active[namespace] ? [{ id: namespace, namespace, is_active: true }] : [])
+  if (key.startsWith("GET /config/instructions/")) {
+    const id = decodeURIComponent(key.slice("GET /config/instructions/".length))
+    return Response.json(active[id])
+  }
+  if (key === "DELETE /config/instructions/active") {
+    log.push(`withdraw ${namespace}`)
+    delete active[namespace]
+    return Response.json({})
+  }
+  const item = body as { namespace: string; mode: string; body: string }
+  log.push(`publish ${item.mode} ${item.namespace}`)
+  active[item.namespace] = { mode: item.mode, body: item.body }
+  return Response.json({})
 }
 
 function sse(frames: Array<[string, unknown]>) {
@@ -161,6 +198,9 @@ function streamInput(
     messages: [],
     maxTokens: 1000,
     abort: new AbortController().signal,
+    instructions: { global: [], project: [] },
+    context: "",
+    published: new Map(),
     ...input,
   }
 }
@@ -551,4 +591,82 @@ describe("twigg delta", () => {
       },
     ])
   })
+})
+
+describe("twigg instructions", () => {
+  const project = "twigg-code/test/p/project"
+  const sources = { global: ["G"], project: ["P1", "P2"] }
+
+  test("mirror the instruction hierarchy down the namespace", () => {
+    const main = TwiggInstructions.levels(project, sources)
+    expect(main.map((level) => [level.namespace, level.mode])).toEqual([
+      ["twigg-code/test", "append"],
+      [project, "append"],
+    ])
+    expect(main[0].body.endsWith("\n\nG")).toBe(true)
+    expect(main[1].body).toBe("P1\n\nP2")
+
+    const child = TwiggInstructions.levels(`${project}/a/explore`, { ...sources, agent: "EXPLORE" })
+    expect(child[1].namespace).toBe(project)
+    expect(child[2]).toEqual({ namespace: `${project}/a/explore`, mode: "replace", body: "EXPLORE\n\nG\n\nP1\n\nP2" })
+    expect(TwiggInstructions.levels(`${project}/a/general`, sources)[2].body).toBe("")
+  })
+
+  it.effect("publishes changed levels only, and withdraws emptied ones", () =>
+    Effect.gen(function* () {
+      const published = new Map<string, string>()
+      const turn = (instructions: TwiggInstructions.Sources, active?: Record<string, { mode: string; body: string }>) =>
+        Effect.gen(function* () {
+          const server = twigg({ "POST /chats/chat_1/responses": [sse([run(), ...text("ok"), done()])] }, active)
+          const { chat } = memoryChat({ chat_id: "chat_1", namespace: project })
+          yield* collect(
+            streamInput({ chat, history: [user("msg_1", [{ type: "text", text: "hi" }])], instructions, published }),
+            server.layer,
+          )
+          return server
+        })
+
+      const first = yield* turn(sources)
+      expect(first.config).toEqual(["publish append twigg-code/test", `publish append ${project}`])
+      // Same content in the same process: nothing to check.
+      expect((yield* turn(sources)).config).toEqual([])
+      const changed = yield* turn({ ...sources, project: ["P3"] }, { ...first.active })
+      expect(changed.config).toEqual([`publish append ${project}`])
+      expect(changed.active[project].body).toBe("P3")
+      // A fresh process finds the same bodies already active and publishes nothing.
+      published.clear()
+      expect((yield* turn({ ...sources, project: ["P3"] }, { ...changed.active })).config).toEqual([])
+      expect((yield* turn({ ...sources, project: [] }, { ...changed.active })).config).toEqual([`withdraw ${project}`])
+    }),
+  )
+
+  it.effect("sends the context block with a prompt, and again only when it changes", () =>
+    Effect.gen(function* () {
+      const server = twigg({
+        "POST /chats/chat_1/responses": [
+          sse([run(), ...text("a"), done()]),
+          sse([run(), ...text("b"), done()]),
+          sse([run(), ...text("c"), done()]),
+        ],
+      })
+      const { store, chat } = memoryChat({ chat_id: "chat_1", namespace: project })
+      const history = [user("msg_1", [{ type: "text", text: "hi" }])]
+      yield* collect(streamInput({ chat, history, context: "<env>cwd: /a</env>" }), server.layer)
+      expect(server.requests[0].body).toMatchObject({
+        input: [{ type: "prompt", text: "<system-context>\n<env>cwd: /a</env>\n</system-context>\n\nhi" }],
+      })
+      const hash = store.state?.context_hash
+      expect(hash).toBeString()
+
+      const next = [...history, user("msg_2", [{ type: "text", text: "again" }])]
+      yield* collect(streamInput({ chat, history: next, context: "<env>cwd: /a</env>" }), server.layer)
+      expect(server.requests[1].body).toMatchObject({ input: [{ type: "prompt", text: "again" }] })
+
+      // A turn with only tool results can't carry the block, so the change waits for the next prompt.
+      const tools = [...next, assistant("msg_3", [completed("call_1", "out")])]
+      yield* collect(streamInput({ chat, history: tools, context: "<env>cwd: /b</env>" }), server.layer)
+      expect(server.requests[2].body).toMatchObject({ input: [{ type: "tool_result", text: "out" }] })
+      expect(store.state?.context_hash).toBe(hash)
+    }),
+  )
 })

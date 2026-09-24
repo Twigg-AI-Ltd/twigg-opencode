@@ -30,6 +30,7 @@ import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { Session } from "./session"
+import { Instruction } from "./instruction"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { HttpClient } from "effect/unstable/http"
@@ -83,6 +84,7 @@ const live: Layer.Layer<
   | LLMClientService
   | RuntimeFlags.Service
   | Session.Service
+  | Instruction.Service
   | FSUtil.Service
   | HttpClient.HttpClient
 > = Layer.effect(
@@ -99,6 +101,8 @@ const live: Layer.Layer<
     const sessions = yield* Session.Service
     const fs = yield* FSUtil.Service
     const http = yield* HttpClient.HttpClient
+    const instruction = yield* Instruction.Service
+    const published = new Map<string, string>()
 
     // Twigg keeps the conversation server-side, so it skips the AI SDK entirely (getLanguage refuses twigg models).
     const twigg = Effect.fn("LLM.twigg")(function* (input: StreamRequest) {
@@ -120,6 +124,11 @@ const live: Layer.Layer<
         apiKey: item.key,
       }
       const variant = input.user.model.variant ? input.model.variants?.[input.user.model.variant] : undefined
+      // AGENTS.md and agent prompts are published to the chat's namespaces. The rest of the system text changes per
+      // machine or per turn, so it goes to the chat as a context block instead.
+      const split = yield* instruction.levels().pipe(Effect.orDie)
+      const files = new Set([...split.global, ...split.project])
+      const child = input.parentSessionID !== undefined
       const stream =
         input.small || !input.history || !input.assistantID
           ? TwiggRuntime.respond({
@@ -139,6 +148,15 @@ const live: Layer.Layer<
               maxTokens: prepared.params.maxOutputTokens,
               reasoningEffort: typeof variant?.reasoning_effort === "string" ? variant.reasoning_effort : undefined,
               abort: input.abort,
+              instructions: { ...split, agent: child ? input.agent.prompt : undefined },
+              // A primary agent's own prompt can't have a namespace (build and plan share one chat), so it rides
+              // along in the context block.
+              context: [
+                ...(!child && input.agent.prompt ? [input.agent.prompt] : []),
+                ...input.system.filter((item) => !files.has(item)),
+                ...(input.user.system ? [input.user.system] : []),
+              ].join("\n\n"),
+              published,
               chat: yield* TwiggRuntime.sessionChat({
                 sessionID: SessionID.make(input.sessionID),
                 parentSessionID: input.parentSessionID ? SessionID.make(input.parentSessionID) : undefined,
@@ -473,6 +491,7 @@ export const node = LayerNode.make({
     llmClient,
     RuntimeFlags.node,
     Session.node,
+    Instruction.node,
     FSUtil.node,
     httpClient,
   ],

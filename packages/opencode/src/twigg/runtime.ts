@@ -1,4 +1,5 @@
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Hash } from "@opencode-ai/core/util/hash"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { LLMEvent, Usage, type FinishReason } from "@opencode-ai/llm"
 import { asSchema, type ModelMessage, type Tool } from "ai"
@@ -9,7 +10,9 @@ import type { Provider } from "@/provider/provider"
 import { PartID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { errorMessage } from "@/util/error"
+import { isRecord } from "@/util/record"
 import { TwiggClient } from "./client"
+import { TwiggInstructions } from "./instructions"
 import { TwiggModels } from "./models"
 import { TwiggNamespace } from "./namespace"
 import { TwiggPending } from "./pending"
@@ -23,6 +26,8 @@ export const State = Schema.Struct({
   // A run whose stream closed before `done` (abort or a dropped connection). It keeps running on the server, so the
   // next turn waits for it and copies what it produced into the local message.
   orphan: Schema.optional(Schema.Struct({ run_id: Schema.String, message_id: Schema.String })),
+  // Hash of the last context block the chat received, so it is only sent again when it changes.
+  context_hash: Schema.optional(Schema.String),
 })
 export type State = typeof State.Type
 
@@ -50,6 +55,13 @@ export interface Input {
   readonly reasoningEffort?: string
   readonly abort: AbortSignal
   readonly chat: Chat
+  // Published to the chat's namespace chain before the request (see TwiggInstructions.levels).
+  readonly instructions: TwiggInstructions.Sources
+  // Per-machine and per-turn system text (env, date, model, skills, MCP). It can't live in a shared namespace, so it
+  // is prepended to the prompt whenever it changes.
+  readonly context: string
+  // Which instruction levels this process already checked, shared across requests.
+  readonly published: Map<string, string>
 }
 
 type Media = { mime: string; data_base64: string; filename?: string }
@@ -84,6 +96,12 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
       const problem = checkRequest(input, next.input, media)
       if (problem) return yield* Effect.fail(apiError(problem, false))
       const state = settled ?? (yield* create(input, next.input))
+      yield* TwiggInstructions.ensure(
+        input.settings,
+        TwiggInstructions.levels(state.namespace, input.instructions),
+        input.published,
+      )
+      const context = withContext(next.input, input.context, state.context_hash)
       const saved = { current: state }
       const save = (patch: Partial<State>) =>
         Effect.suspend(() => {
@@ -95,7 +113,7 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
         path: `/chats/${state.chat_id}/responses`,
         body: {
           model: input.model.api.id,
-          input: next.input,
+          input: context.parts,
           idempotency_key: input.assistantID,
           max_tokens: input.maxTokens,
           reasoning_effort: input.reasoningEffort,
@@ -105,13 +123,26 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
       return translate(events, {
         // The server accepted the input, so the cursor moves. Until `done`, the run counts as an orphan.
         run: (runID) =>
-          save({ cursor_message_id: next.last, orphan: { run_id: runID, message_id: input.assistantID } }),
+          save({
+            cursor_message_id: next.last,
+            orphan: { run_id: runID, message_id: input.assistantID },
+            ...(context.hash ? { context_hash: context.hash } : {}),
+          }),
         done: save({ orphan: undefined }),
         execute: (calls) => execute(input, calls),
       }).pipe(
         // The input already landed under this idempotency key, e.g. a retry after the connection broke before `run`.
         Stream.catchIf(landed, (error) =>
-          reconcile(input, state.chat_id, error.runID, save({ cursor_message_id: next.last, orphan: undefined })),
+          reconcile(
+            input,
+            state.chat_id,
+            error.runID,
+            save({
+              cursor_message_id: next.last,
+              orphan: undefined,
+              ...(context.hash ? { context_hash: context.hash } : {}),
+            }),
+          ),
         ),
       )
     }),
@@ -246,10 +277,16 @@ function translate<R>(
               yield* Effect.logInfo("twigg closed unanswered tool calls", { calls: event.data.closed_tool_calls })
             return [LLMEvent.stepStart({ index: 0 })]
           case "config_warnings":
-          case "translation_warnings":
-            if (event.data.warnings.length > 0)
-              yield* Effect.logWarning(`twigg ${event.event}`, { warnings: JSON.stringify(event.data.warnings) })
+          case "translation_warnings": {
+            // Subagent levels replace on purpose, and Twigg reports that on every turn even when no org-wide
+            // instruction exists (seen 2026-09-24).
+            const warnings = event.data.warnings.filter(
+              (warning) => !(isRecord(warning) && warning.code === "global_instruction_replaced"),
+            )
+            if (warnings.length > 0)
+              yield* Effect.logWarning(`twigg ${event.event}`, { warnings: JSON.stringify(warnings) })
             return []
+          }
           case "compacting":
             yield* Effect.logInfo("twigg is compacting the chat history", event.data)
             return []
@@ -423,7 +460,7 @@ const create = Effect.fnUntraced(function* (input: Input, parts: readonly Part[]
       user_metadata: opened.user_metadata,
     },
   })
-  const state = { chat_id: chat.id, namespace: opened.namespace }
+  const state: State = { chat_id: chat.id, namespace: opened.namespace }
   yield* input.chat.save(state)
   return state
 })
@@ -496,6 +533,21 @@ function definitions(tools: Record<string, Tool>) {
       input_schema: asSchema(tool.inputSchema).jsonSchema,
     }))
   return items.length > 0 ? items : undefined
+}
+
+// Adds the context block to the first prompt when it changed since the chat last saw it. A request with only tool
+// results carries no prompt, so the block waits for the next one.
+function withContext(parts: readonly Part[], context: string, sent: string | undefined) {
+  const hash = context.trim() === "" ? undefined : Hash.fast(context)
+  const index = parts.findIndex((part) => part.type === "prompt")
+  if (!hash || hash === sent || index === -1) return { parts, hash: undefined }
+  const block = `<system-context>\n${context}\n</system-context>`
+  return {
+    parts: parts.map((part, i) =>
+      i === index && part.type === "prompt" ? { ...part, text: part.text ? `${block}\n\n${part.text}` : block } : part,
+    ),
+    hash,
+  }
 }
 
 function prompt(parts: readonly SessionV1.Part[]): Part[] {
