@@ -31,6 +31,8 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { TwiggClient } from "@/twigg/client"
+import { TwiggModels } from "@/twigg/models"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
@@ -1135,7 +1137,12 @@ export function toPublicInfo(provider: Info): Info {
 }
 
 export function defaultModelIDs<T extends { models: Record<string, { id: string }> }>(providers: Record<string, T>) {
-  return mapValues(providers, (item) => sort(Object.values(item.models))[0].id)
+  return mapValues(
+    providers,
+    (item, id) =>
+      (id === TwiggModels.PROVIDER_ID ? TwiggModels.preferredModel(item.models) : undefined) ??
+      sort(Object.values(item.models))[0].id,
+  )
 }
 
 export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundError>()("ProviderModelNotFoundError", {
@@ -1396,6 +1403,7 @@ const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
+    const twiggModels = yield* TwiggModels.Service
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
@@ -1404,6 +1412,19 @@ const layer = Layer.effect(
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
+
+        // Twigg isn't in models.dev. Its models come from its own API, which needs the key, so they're loaded here
+        // and the env and auth.json loaders below connect the provider as usual.
+        if (
+          (cfg.enabled_providers?.includes(TwiggModels.PROVIDER_ID) ?? true) &&
+          !cfg.disabled_providers?.includes(TwiggModels.PROVIDER_ID)
+        ) {
+          const baseURL = cfg.twigg?.baseURL ?? TwiggClient.DEFAULT_BASE_URL
+          const stored = yield* auth.get(TwiggModels.PROVIDER_ID).pipe(Effect.orDie)
+          const apiKey = (yield* env.get(TwiggModels.ENV_KEY)) ?? (stored?.type === "api" ? stored.key : undefined)
+          const models = apiKey ? yield* twiggModels.get({ baseURL, apiKey }) : []
+          database[TwiggModels.PROVIDER_ID] = TwiggModels.toProvider(models, baseURL)
+        }
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1898,6 +1919,11 @@ const layer = Layer.effect(
       const envs = yield* env.all()
       const key = `${model.providerID}/${model.id}`
       if (s.models.has(key)) return s.models.get(key)!
+      // Twigg models run through the Twigg runtime. Resolving an SDK for them would try to install the npm sentinel.
+      if (model.api.npm === TwiggModels.NPM)
+        return yield* Effect.die(
+          new InitError({ providerID: model.providerID, cause: "Twigg has no AI SDK language model" }),
+        )
 
       const provider = s.providers[model.providerID]
       return yield* EffectPromise.refineRejection(
@@ -2029,6 +2055,12 @@ const layer = Layer.effect(
         return { providerID: entry.providerID, modelID: entry.modelID }
       }
 
+      // This fork is Twigg-first: with no configured or recent model, a connected Twigg wins.
+      const twigg = s.providers[TwiggModels.PROVIDER_ID]
+      if (twigg) {
+        return { providerID: twigg.id, modelID: ModelV2.ID.make(defaultModelIDs({ twigg }).twigg) }
+      }
+
       const configured = Object.keys(cfg.provider ?? {})
       const provider = Object.values(s.providers).find((p) => configured.length === 0 || configured.includes(p.id))
       if (!provider) return yield* new NoProvidersError()
@@ -2066,7 +2098,16 @@ export function parseModel(model: string) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Config.node, Auth.node, Env.node, Plugin.node, ModelsDev.node, RuntimeFlags.node],
+  deps: [
+    FSUtil.node,
+    Config.node,
+    Auth.node,
+    Env.node,
+    Plugin.node,
+    ModelsDev.node,
+    RuntimeFlags.node,
+    TwiggModels.node,
+  ],
 })
 
 export * as Provider from "./provider"

@@ -3,8 +3,10 @@ import { Config } from "@/config/config"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { Auth } from "@/auth"
+import { TwiggClient } from "@/twigg/client"
+import { TwiggModels } from "@/twigg/models"
 
-import { mapValues } from "remeda"
+import { mapValues, pickBy } from "remeda"
 import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -50,13 +52,19 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       }
       const connected = yield* provider.list()
       const credentials = yield* authStore.all().pipe(Effect.orDie)
+      // Twigg isn't in models.dev, so list it (without models until a key is set) for the connect dialog.
+      const twigg =
+        (enabled ? enabled.has(TwiggModels.PROVIDER_ID) : true) && !disabled.has(TwiggModels.PROVIDER_ID)
+          ? { [TwiggModels.PROVIDER_ID]: TwiggModels.toProvider([], TwiggClient.DEFAULT_BASE_URL) }
+          : {}
       const providers = Object.assign(
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
+        twigg,
         connected,
       )
       return {
         all: Object.values(providers).map(Provider.toPublicInfo),
-        default: Provider.defaultModelIDs(providers),
+        default: Provider.defaultModelIDs(pickBy(providers, (item) => Object.keys(item.models).length > 0)),
         connected: Object.keys(providers).filter((id) => id in connected || credentials[id]),
       }
     })

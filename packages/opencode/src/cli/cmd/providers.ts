@@ -5,6 +5,7 @@ import { CliError, effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import * as Prompt from "../effect/prompt"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { TwiggModels } from "@/twigg/models"
 
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
@@ -270,7 +271,9 @@ export const ProvidersListCommand = effectCmd({
 
     yield* Prompt.outro(`${results.length} credentials`)
 
-    const activeEnvVars: Array<{ provider: string; envVar: string }> = []
+    const activeEnvVars: Array<{ provider: string; envVar: string }> = process.env[TwiggModels.ENV_KEY]
+      ? [{ provider: "Twigg", envVar: TwiggModels.ENV_KEY }]
+      : []
 
     for (const [providerID, provider] of Object.entries(database)) {
       for (const envVar of provider.env) {
@@ -384,7 +387,12 @@ export const ProvidersLoginCommand = effectCmd({
       enabled,
       providerNames: Object.fromEntries(Object.entries(config.provider ?? {}).map(([id, p]) => [id, p.name])),
     })
+    const twigg =
+      (enabled ? enabled.has(TwiggModels.PROVIDER_ID) : true) && !disabled.has(TwiggModels.PROVIDER_ID)
+        ? [{ label: "Twigg", value: TwiggModels.PROVIDER_ID as string, hint: "recommended" }]
+        : []
     const options = [
+      ...twigg,
       ...pipe(
         providers,
         values(),
@@ -396,7 +404,6 @@ export const ProvidersLoginCommand = effectCmd({
           label: x.name,
           value: x.id,
           hint: {
-            opencode: "recommended",
             openai: "ChatGPT Plus/Pro or API key",
           }[x.id],
         })),
@@ -461,6 +468,10 @@ export const ProvidersLoginCommand = effectCmd({
           "Configure via opencode.json options (profile, region, endpoint) or\n" +
           "AWS environment variables (AWS_PROFILE, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_WEB_IDENTITY_TOKEN_FILE).",
       )
+    }
+
+    if (provider === TwiggModels.PROVIDER_ID) {
+      yield* Prompt.log.info("Create an api key at https://twigg.ai/dashboard/api-keys")
     }
 
     if (provider === "opencode") {
