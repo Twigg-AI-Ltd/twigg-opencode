@@ -3,6 +3,7 @@ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { TwiggModels } from "@/twigg/models"
 import type { MessageV2 } from "./message-v2"
 
 const COMPACTION_BUFFER = 20_000
@@ -25,6 +26,8 @@ export function isOverflow(input: {
   model: Provider.Model
   outputTokenMax?: number
 }) {
+  // Twigg compacts chat history on its own server, so a twigg session never overflows locally.
+  if (input.model.providerID === TwiggModels.PROVIDER_ID) return false
   if (input.cfg.compaction?.auto === false) return false
   if (input.model.limit.context === 0) return false
 

@@ -576,6 +576,15 @@ export function Session() {
           })
           return
         }
+        if (selectedModel.providerID === "twigg") {
+          toast.show({
+            variant: "info",
+            message: "Twigg manages context automatically, so there's nothing to compact",
+            duration: 3000,
+          })
+          dialog.clear()
+          return
+        }
         void sdk.client.session.summarize({
           sessionID: route.sessionID,
           modelID: selectedModel.modelID,

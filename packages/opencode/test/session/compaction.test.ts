@@ -381,6 +381,18 @@ function compactionContext(context: string) {
 
 describe("session.compaction.isOverflow", () => {
   it.live(
+    "never overflows for twigg, which compacts on its own server",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = { ...createModel({ context: 100_000, output: 32_000 }), providerID: ProviderV2.ID.make("twigg") }
+        const tokens = { input: 500_000, output: 5_000, reasoning: 0, cache: { read: 0, write: 0 } }
+        expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
+      }),
+    ),
+  )
+
+  it.live(
     "returns true when token count exceeds usable context",
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
@@ -624,6 +636,81 @@ describe("session.compaction.create", () => {
 })
 
 describe("session.compaction.prune", () => {
+  it.live(
+    "leaves twigg sessions alone",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const ssn = yield* SessionNs.Service
+          const info = yield* ssn.create({})
+          const twigg = { providerID: ProviderV2.ID.make("twigg"), modelID: ModelV2.ID.make("gpt-6-luna") }
+          const user = (text: string) =>
+            Effect.gen(function* () {
+              const msg = yield* ssn.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID: info.id,
+                agent: "build",
+                model: twigg,
+                time: { created: Date.now() },
+              })
+              yield* ssn.updatePart({
+                id: PartID.ascending(),
+                messageID: msg.id,
+                sessionID: info.id,
+                type: "text",
+                text,
+              })
+              return msg
+            })
+          const first = yield* user("first")
+          const reply: SessionV1.Assistant = {
+            id: MessageID.ascending(),
+            role: "assistant",
+            sessionID: info.id,
+            mode: "build",
+            agent: "build",
+            path: { cwd: dir, root: dir },
+            cost: 0,
+            tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: twigg.modelID,
+            providerID: twigg.providerID,
+            parentID: first.id,
+            time: { created: Date.now() },
+            finish: "end_turn",
+          }
+          yield* ssn.updateMessage(reply)
+          yield* ssn.updatePart({
+            id: PartID.ascending(),
+            messageID: reply.id,
+            sessionID: info.id,
+            type: "tool",
+            callID: crypto.randomUUID(),
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: {},
+              output: "x".repeat(200_000),
+              title: "done",
+              metadata: {},
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          yield* user("second")
+          yield* user("third")
+
+          yield* compact.prune({ sessionID: info.id })
+
+          const part = (yield* ssn.messages({ sessionID: info.id }))
+            .flatMap((msg) => msg.parts)
+            .find((part) => part.type === "tool")
+          expect(part?.type === "tool" && part.state.status === "completed" && part.state.time.compacted).toBeFalsy()
+        }),
+      { config: { compaction: { prune: true } } },
+    ),
+  )
+
   it.live(
     "compacts old completed tool output",
     provideTmpdirInstance(

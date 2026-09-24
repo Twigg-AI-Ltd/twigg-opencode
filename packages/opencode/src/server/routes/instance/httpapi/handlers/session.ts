@@ -37,6 +37,7 @@ import {
   UpdatePayload,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
+import { TwiggModels } from "@/twigg/models"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -274,6 +275,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
+      // Twigg compacts on its own server; there is nothing to summarize locally.
+      if (ctx.payload.providerID === TwiggModels.PROVIDER_ID) return yield* new HttpApiError.BadRequest({})
       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()

@@ -22,6 +22,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
+import { TwiggModels } from "@/twigg/models"
 
 export const Event = SessionCompactionEvent
 
@@ -279,6 +280,9 @@ const layer = Layer.effect(
         .messages({ sessionID: input.sessionID })
         .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(undefined)))
       if (!msgs) return
+      // Twigg holds the model context, so pruning would only blank tool output in the local transcript.
+      const last = msgs.findLast((msg) => msg.info.role === "user")
+      if (last?.info.role === "user" && last.info.model.providerID === TwiggModels.PROVIDER_ID) return
 
       let total = 0
       let pruned = 0
