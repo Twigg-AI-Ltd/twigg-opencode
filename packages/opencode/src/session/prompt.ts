@@ -55,6 +55,7 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { TwiggModels } from "@/twigg/models"
 import { LLMEvent } from "@opencode-ai/llm"
 
 // @ts-ignore
@@ -91,6 +92,17 @@ function formatMcpResourceBytes(value: number) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`
   return `${Math.ceil(value / (1024 * 1024))} MB`
+}
+
+// The session title for a twigg session until Twigg can generate one: the first prompt, cut short like the chat title.
+function promptTitle(parts: readonly SessionV1.Part[]) {
+  const text = parts
+    .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!text) return undefined
+  return text.length > 80 ? text.slice(0, 79) + "…" : text
 }
 
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
@@ -219,6 +231,7 @@ const layer = Layer.effect(
         ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
         : ((yield* provider.getSmallModel(input.providerID)) ??
           (yield* provider.getModel(input.providerID, input.modelID)))
+      const twigg = mdl.providerID === TwiggModels.PROVIDER_ID
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl)
@@ -238,13 +251,19 @@ const layer = Layer.effect(
           Stream.filter(LLMEvent.is.textDelta),
           Stream.map((e) => e.text),
           Stream.mkString,
+          // TODO(twigg-api#5): Twigg can't run the title agent until it has throwaway calls; the first prompt stands in.
+          Effect.catchIf(
+            () => twigg,
+            () => Effect.succeed(""),
+          ),
           Effect.orDie,
         )
-      const cleaned = text
-        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line.length > 0)
+      const cleaned =
+        text
+          .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+          .split("\n")
+          .map((line) => line.trim())
+          .find((line) => line.length > 0) ?? (twigg ? promptTitle(firstUser.parts) : undefined)
       if (!cleaned) return
       const t = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned
       yield* sessions

@@ -31,6 +31,7 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
         (yield* provider.getSmallModel(fallback.providerID)) ??
         (yield* provider.getModel(fallback.providerID, fallback.modelID))
       const sessionID = SessionID.descending()
+      // TODO(twigg-api#5): for twigg this fails until Twigg has throwaway calls, and a random slug is used below.
       const result = yield* llm
         .stream({
           agent: COPY_NAME_AGENT,

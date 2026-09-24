@@ -10,6 +10,7 @@ import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
 import PROMPT_GENERATE from "./generate.txt"
+import { TwiggModels } from "@/twigg/models"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
@@ -372,6 +373,13 @@ const layer = Layer.effect(
         const cfg = yield* config.get()
         const model = input.model ?? (yield* provider.defaultModel())
         const resolved = yield* provider.getModel(model.providerID, model.modelID)
+        // TODO(twigg-api#5): generating an agent is a one-off model call, which needs Twigg's throwaway calls.
+        if (resolved.api.npm === TwiggModels.NPM)
+          return yield* Effect.die(
+            new Error(
+              "Generating agents with Twigg is coming soon. For now, write the agent's markdown file yourself.",
+            ),
+          )
         const language = yield* provider.getLanguage(resolved)
         const tracer = cfg.experimental?.openTelemetry
           ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))

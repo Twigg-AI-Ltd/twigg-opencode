@@ -6,6 +6,8 @@ import { UI } from "../ui"
 import * as Prompt from "../effect/prompt"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { TwiggModels } from "@/twigg/models"
+import { TwiggClient } from "@/twigg/client"
+import { FetchHttpClient } from "effect/unstable/http"
 
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
@@ -17,7 +19,7 @@ import type { Hooks } from "@opencode-ai/plugin"
 import { Process } from "@/util/process"
 import { errorMessage } from "@/util/error"
 import { text } from "node:stream/consumers"
-import { Effect, Option } from "effect"
+import { Effect, Option, Result, Schema } from "effect"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
 
@@ -493,10 +495,34 @@ export const ProvidersLoginCommand = effectCmd({
       validate: (x) => (x && x.length > 0 ? undefined : "Required"),
     })
     const apiKey = yield* promptValue(key)
+    if (provider === TwiggModels.PROVIDER_ID && !(yield* checkTwiggKey(apiKey))) return
     yield* Effect.orDie(authSvc.set(provider, { type: "api", key: apiKey }))
 
     yield* Prompt.outro("Done")
   }),
+})
+
+// A rejected key isn't saved. If Twigg can't be reached, the key is saved anyway and checked on first use.
+const checkTwiggKey = Effect.fnUntraced(function* (apiKey: string) {
+  const result = yield* TwiggClient.request(
+    { baseURL: TwiggClient.DEFAULT_BASE_URL, apiKey },
+    Schema.Array(Schema.Unknown),
+    {
+      method: "GET",
+      path: "/models",
+    },
+  ).pipe(Effect.provide(FetchHttpClient.layer), Effect.result)
+  if (Result.isSuccess(result)) {
+    yield* Prompt.log.success(`Key works: ${result.success.length} Twigg models available`)
+    return true
+  }
+  if (result.failure._tag === "TwiggRequestError" && result.failure.status === 401) {
+    yield* Prompt.log.error("Twigg rejected this key. Check it at https://twigg.ai/dashboard/api-keys")
+    yield* Prompt.outro("Key not saved")
+    return false
+  }
+  yield* Prompt.log.warn(`Couldn't check the key with Twigg (${result.failure.message}). Saving it anyway.`)
+  return true
 })
 
 export const ProvidersLogoutCommand = effectCmd({
