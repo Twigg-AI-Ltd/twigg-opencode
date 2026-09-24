@@ -4,7 +4,6 @@ import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
 import type { Provider } from "@/provider/provider"
-import { SystemPrompt } from "../system"
 import { Effect, Record } from "effect"
 import type { Tool } from "ai"
 import type { Plugin } from "@/plugin"
@@ -41,7 +40,7 @@ export type Prepared = {
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const system = [
     [
-      ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      ...(input.agent.prompt ? [input.agent.prompt] : []),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]
