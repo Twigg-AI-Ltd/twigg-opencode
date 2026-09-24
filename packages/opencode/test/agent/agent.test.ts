@@ -52,9 +52,7 @@ it.instance("returns default native agents when no config", () =>
     expect(names).toContain("plan")
     expect(names).toContain("general")
     expect(names).toContain("explore")
-    expect(names).toContain("compaction")
     expect(names).toContain("title")
-    expect(names).toContain("summary")
   }),
 )
 
@@ -167,17 +165,6 @@ it.instance("general agent denies todo tools", () =>
     expect(general?.mode).toBe("subagent")
     expect(general?.hidden).toBeUndefined()
     expect(evalPerm(general, "todowrite")).toBe("deny")
-  }),
-)
-
-it.instance("compaction agent denies all permissions", () =>
-  Effect.gen(function* () {
-    const compaction = yield* load((svc) => svc.get("compaction"))
-    expect(compaction).toBeDefined()
-    expect(compaction?.hidden).toBe(true)
-    expect(evalPerm(compaction, "bash")).toBe("deny")
-    expect(evalPerm(compaction, "edit")).toBe("deny")
-    expect(evalPerm(compaction, "read")).toBe("deny")
   }),
 )
 
@@ -706,10 +693,10 @@ it.instance(
 
 it.instance(
   "defaultAgent throws when default_agent points to hidden agent",
-  () => expectDefaultAgentError('default agent "compaction" is hidden'),
+  () => expectDefaultAgentError('default agent "title" is hidden'),
   {
     config: {
-      default_agent: "compaction",
+      default_agent: "title",
     },
   },
 )

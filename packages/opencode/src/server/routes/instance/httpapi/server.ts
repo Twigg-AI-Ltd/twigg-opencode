@@ -28,7 +28,6 @@ import { Vcs } from "@/project/vcs"
 import { ProviderAuth } from "@/provider/auth"
 import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
-import { SessionCompaction } from "@/session/compaction"
 import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
@@ -239,7 +238,6 @@ const app = LayerNode.group([
   EventV2Bridge.node,
   SessionRunState.node,
   SessionProcessor.node,
-  SessionCompaction.node,
   SessionRevert.node,
   TwiggSync.node,
   SessionSummary.node,

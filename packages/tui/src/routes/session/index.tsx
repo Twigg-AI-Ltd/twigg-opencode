@@ -575,29 +575,12 @@ export function Session() {
         name: "compact",
         aliases: ["summarize"],
       },
+      // Twigg compacts chat history on its own server.
       run: () => {
-        const selectedModel = local.model.current()
-        if (!selectedModel) {
-          toast.show({
-            variant: "warning",
-            message: "Connect a provider to summarize this session",
-            duration: 3000,
-          })
-          return
-        }
-        if (selectedModel.providerID === "twigg") {
-          toast.show({
-            variant: "info",
-            message: "Twigg manages context automatically, so there's nothing to compact",
-            duration: 3000,
-          })
-          dialog.clear()
-          return
-        }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
+        toast.show({
+          variant: "info",
+          message: "Twigg manages context automatically, so there's nothing to compact",
+          duration: 3000,
         })
         dialog.clear()
       },

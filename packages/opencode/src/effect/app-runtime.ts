@@ -24,7 +24,6 @@ import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { SessionRunState } from "@/session/run-state"
 import { SessionProcessor } from "@/session/processor"
-import { SessionCompaction } from "@/session/compaction"
 import { SessionRevert } from "@/session/revert"
 import { TwiggSync } from "@/twigg/sync"
 import { SessionSummary } from "@/session/summary"
@@ -83,7 +82,6 @@ export const AppLayer = AppNodeBuilderV1.build(
     EventV2Bridge.node,
     SessionRunState.node,
     SessionProcessor.node,
-    SessionCompaction.node,
     SessionRevert.node,
     TwiggSync.node,
     SessionSummary.node,

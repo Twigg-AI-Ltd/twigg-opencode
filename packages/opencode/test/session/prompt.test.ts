@@ -30,7 +30,6 @@ import { SessionMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
@@ -200,7 +199,6 @@ const promptRoot = LayerNode.group([
   Truncate.node,
   SessionProcessor.node,
   Image.node,
-  SessionCompaction.node,
   SessionRevert.node,
   Instruction.node,
   SystemPrompt.node,
