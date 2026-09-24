@@ -1525,6 +1525,8 @@ const scenarios: Scenario[] = [
         }),
       "status",
     ),
+  // Twigg sessions refuse shell commands (they'd add to history without a model call) and local summarize (Twigg
+  // compacts on its own server).
   http.protected
     .post("/session/{sessionID}/shell", "session.shell")
     .preserveDatabase()
@@ -1535,67 +1537,17 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: { agent: "build", model: { providerID: "twigg", modelID: "test-model" }, command: "printf shell-ok" },
     }))
-    .json(
-      200,
-      (body) => {
-        object(body)
-        check(isRecord(body.info) && body.info.role === "assistant", "shell should return assistant message")
-        check(
-          Array.isArray(body.parts) && body.parts.some((part) => isRecord(part) && part.type === "tool"),
-          "shell should return a tool part",
-        )
-      },
-      "status",
-    ),
+    .status(400),
   http.protected
     .post("/session/{sessionID}/summarize", "session.summarize")
     .preserveDatabase()
-    .withLlm()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Summarize session" })
-        yield* ctx.message(session.id, { text: "summarize this work" })
-        const summary = [
-          "## Objective",
-          "- Exercise session summarize.",
-          "",
-          "## Important Details",
-          "- Use fake LLM.",
-          "- Keep route local.",
-          "- Test fixture: test/server/httpapi-exercise/index.ts.",
-          "",
-          "## Work State",
-          "- Completed: Summary generated.",
-          "- Active: (none)",
-          "- Blocked: (none)",
-          "",
-          "## Next Move",
-          "1. (none)",
-        ].join("\n")
-        yield* ctx.llmText(summary)
-        yield* ctx.llmText(summary)
-        return session
-      }),
-    )
+    .seeded((ctx) => ctx.session({ title: "Summarize session" }))
     .at((ctx) => ({
       path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
       body: { providerID: "twigg", modelID: "test-model", auto: false },
     }))
-    .jsonEffect(
-      200,
-      (body, ctx) =>
-        Effect.gen(function* () {
-          check(body === true, "summarize should return true")
-          const messages = yield* ctx.messages(ctx.state.id)
-          check(
-            messages.some((message) => message.info.role === "assistant" && message.info.summary === true),
-            "summarize should create a summary assistant message",
-          )
-          yield* ctx.llmWait(1)
-        }),
-      "status",
-    ),
+    .status(400),
   http.protected
     .post("/session/{sessionID}/revert", "session.revert")
     .mutating()
@@ -1742,13 +1694,7 @@ const scenarios: Scenario[] = [
     .status(400),
 ]
 
-const llmScenarios = new Set([
-  "session.init",
-  "session.prompt",
-  "session.prompt_async",
-  "session.command",
-  "session.summarize",
-])
+const llmScenarios = new Set(["session.init", "session.prompt", "session.prompt_async", "session.command"])
 
 const main = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.promise(() => disposeApps()).pipe(Effect.andThen(cleanupExercisePaths)))
