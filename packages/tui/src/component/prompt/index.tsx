@@ -46,6 +46,7 @@ import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
+import { COMING_SOON, twiggUnsupported } from "../../util/twigg"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
@@ -832,6 +833,11 @@ export function Prompt(props: PromptProps) {
           desc: "Shell mode",
           group: "Prompt",
           cmd: () => {
+            const session = props.sessionID ? sync.session.get(props.sessionID) : undefined
+            if (twiggUnsupported({ session, providerID: local.model.current()?.providerID })) {
+              toast.show({ variant: "info", message: COMING_SOON.shell, duration: 3000 })
+              return
+            }
             setStore("placeholder", randomIndex(shell().length))
             setStore("mode", "shell")
           },

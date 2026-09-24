@@ -85,6 +85,7 @@ import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
+import { COMING_SOON, twiggUnsupported } from "./util/twigg"
 import { cliErrorMessage, errorFormat } from "./util/error"
 
 registerOpencodeSpinner()
@@ -509,6 +510,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       .find((x) => x.parentID === undefined)?.id
     if (match) {
       continued = true
+      // Twigg sessions can't fork yet; open the original instead.
+      if (args.fork && twiggUnsupported({ session: sync.session.get(match) })) {
+        toast.show({ variant: "info", message: COMING_SOON.fork, duration: 3000 })
+        route.navigate({ type: "session", sessionID: match })
+        return
+      }
       if (args.fork) {
         void sdk.client.session.fork({ sessionID: match }).then((result) => {
           if (result.data?.id) {
@@ -530,6 +537,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   createEffect(() => {
     if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
     forked = true
+    if (twiggUnsupported({ session: sync.session.get(args.sessionID) })) {
+      toast.show({ variant: "info", message: COMING_SOON.fork, duration: 3000 })
+      route.navigate({ type: "session", sessionID: args.sessionID })
+      return
+    }
     void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
       if (result.data?.id) {
         route.navigate({ type: "session", sessionID: result.data.id })

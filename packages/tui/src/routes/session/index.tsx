@@ -58,6 +58,7 @@ import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
+import { COMING_SOON, twiggUnsupported } from "../../util/twigg"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -462,6 +463,12 @@ export function Session() {
     }
   }
 
+  const twigg = () => twiggUnsupported({ session: session(), providerID: local.model.current()?.providerID })
+  const soon = (feature: keyof typeof COMING_SOON) => {
+    toast.show({ variant: "info", message: COMING_SOON[feature], duration: 3000 })
+    dialog.clear()
+  }
+
   const sessionCommandList = createMemo(() => [
     {
       title: session()?.share?.url ? "Copy share link" : "Share session",
@@ -473,6 +480,7 @@ export function Session() {
         name: "share",
       },
       run: async () => {
+        if (twigg()) return soon("share")
         const copy = (url: string) =>
           clipboard
             .write?.(url)
@@ -544,6 +552,7 @@ export function Session() {
         name: "fork",
       },
       run: () => {
+        if (twigg()) return soon("fork")
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
@@ -602,6 +611,7 @@ export function Session() {
         name: "unshare",
       },
       run: async () => {
+        if (twigg()) return soon("share")
         await sdk.client.session
           .unshare({
             sessionID: route.sessionID,
@@ -624,6 +634,7 @@ export function Session() {
         name: "undo",
       },
       run: async () => {
+        if (twigg()) return soon("undo")
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const message = messagesBeforeRevert().findLast((item) => item.role === "user")
@@ -661,6 +672,7 @@ export function Session() {
         name: "redo",
       },
       run: () => {
+        if (twigg()) return soon("undo")
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return

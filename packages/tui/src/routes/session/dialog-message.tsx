@@ -6,6 +6,9 @@ import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { useLocal } from "../../context/local"
+import { useToast } from "../../ui/toast"
+import { COMING_SOON, twiggUnsupported } from "../../util/twigg"
 
 export function DialogMessage(props: {
   messageID: string
@@ -17,6 +20,10 @@ export function DialogMessage(props: {
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
   const clipboard = useClipboard()
+  const local = useLocal()
+  const toast = useToast()
+  const twigg = () =>
+    twiggUnsupported({ session: sync.session.get(props.sessionID), providerID: local.model.current()?.providerID })
 
   return (
     <DialogSelect
@@ -27,6 +34,11 @@ export function DialogMessage(props: {
           value: "session.revert",
           description: "undo messages and file changes",
           onSelect: (dialog) => {
+            if (twigg()) {
+              toast.show({ variant: "info", message: COMING_SOON.undo, duration: 3000 })
+              dialog.clear()
+              return
+            }
             const msg = message()
             if (!msg) return
 
@@ -78,6 +90,11 @@ export function DialogMessage(props: {
           value: "session.fork",
           description: "create a new session",
           onSelect: async (dialog) => {
+            if (twigg()) {
+              toast.show({ variant: "info", message: COMING_SOON.fork, duration: 3000 })
+              dialog.clear()
+              return
+            }
             const result = await sdk.client.session.fork({
               sessionID: props.sessionID,
               messageID: props.messageID,

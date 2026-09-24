@@ -73,6 +73,43 @@ describe("session action routes", () => {
   )
 
   it.instance(
+    "twigg sessions refuse routes that would rewrite local history",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "Content-Type": "application/json" }
+        const created = yield* requestInDirectory("/session", test.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ metadata: { twigg: { chat_id: "chat_1", namespace: "twigg-code/x/p/y" } } }),
+        })
+        const session = (yield* created.json) as SessionNs.Info
+        const base = `/session/${session.id}`
+        const calls: Array<[string, string, unknown?]> = [
+          ["POST", `${base}/fork`, {}],
+          ["POST", `${base}/revert`, { messageID: "msg_1" }],
+          ["POST", `${base}/unrevert`],
+          ["POST", `${base}/share`],
+          ["DELETE", `${base}/share`],
+          ["POST", `${base}/shell`, { agent: "build", command: "ls" }],
+          ["POST", `${base}/summarize`, { providerID: "twigg", modelID: "gpt-6-luna" }],
+          ["DELETE", `${base}/message/msg_1`],
+          ["DELETE", `${base}/message/msg_1/part/prt_1`],
+        ]
+        const statuses = yield* Effect.forEach(calls, ([method, path, body]) =>
+          requestInDirectory(path, test.directory, {
+            method,
+            headers,
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          }).pipe(Effect.map((response) => `${method} ${path.slice(base.length)} ${response.status}`)),
+        )
+        expect(statuses).toEqual(calls.map(([method, path]) => `${method} ${path.slice(base.length)} 400`))
+        yield* SessionNs.Service.use((svc) => svc.remove(session.id).pipe(Effect.ignore))
+      }),
+    { git: true },
+  )
+
+  it.instance(
     "abort route returns success",
     () =>
       Effect.gen(function* () {
