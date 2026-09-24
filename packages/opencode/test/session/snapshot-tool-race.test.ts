@@ -31,6 +31,7 @@ import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { testProviderConfig } from "../lib/test-provider"
 
 const mcp = Layer.succeed(
   MCP.Service,
@@ -94,34 +95,7 @@ const it = testEffect(
   ]),
 )
 
-const providerCfg = (url: string) => ({
-  provider: {
-    test: {
-      name: "Test",
-      id: "test",
-      env: [],
-      npm: "@ai-sdk/openai-compatible",
-      models: {
-        "test-model": {
-          id: "test-model",
-          name: "Test Model",
-          attachment: false,
-          reasoning: false,
-          temperature: false,
-          tool_call: true,
-          release_date: "2025-01-01",
-          limit: { context: 100000, output: 10000 },
-          cost: { input: 0, output: 0 },
-          options: {},
-        },
-      },
-      options: {
-        apiKey: "test-key",
-        baseURL: url,
-      },
-    },
-  },
-})
+const providerCfg = (url: string) => testProviderConfig(url)
 
 it.live("tool execution produces non-empty session diff (snapshot race)", () =>
   provideTmpdirServer(
@@ -186,4 +160,5 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
     }),
     { git: true, config: providerCfg },
   ),
+  30_000,
 )

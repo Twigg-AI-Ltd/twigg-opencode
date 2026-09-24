@@ -13,6 +13,7 @@ import { runtime } from "./runtime"
 import type { ActiveScenario, Options, ProjectOptions, Result, Scenario, ScenarioContext, SeededContext } from "./types"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { TEST_MODEL, testProviderConfig } from "../../lib/test-provider"
 
 export function runScenario(options: Options) {
   return (scenario: Scenario) => {
@@ -225,34 +226,9 @@ function projectOptions(
 
 function fakeLlmConfig(url: string): Partial<ConfigV1.Info> {
   return {
-    model: "test/test-model",
-    small_model: "test/test-model",
-    provider: {
-      test: {
-        name: "Test",
-        id: "test",
-        env: [],
-        npm: "@ai-sdk/openai-compatible",
-        models: {
-          "test-model": {
-            id: "test-model",
-            name: "Test Model",
-            attachment: false,
-            reasoning: false,
-            temperature: false,
-            tool_call: true,
-            release_date: "2025-01-01",
-            limit: { context: 100000, output: 10000 },
-            cost: { input: 0, output: 0 },
-            options: {},
-          },
-        },
-        options: {
-          apiKey: "test-key",
-          baseURL: url,
-        },
-      },
-    },
+    ...testProviderConfig(url),
+    model: TEST_MODEL,
+    small_model: TEST_MODEL,
   }
 }
 

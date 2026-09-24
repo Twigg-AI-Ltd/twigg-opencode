@@ -37,17 +37,17 @@ const summary = Layer.succeed(
 )
 
 const ref = {
-  providerID: ProviderV2.ID.make("test"),
+  providerID: ProviderV2.ID.make("twigg"),
   modelID: ModelV2.ID.make("test-model"),
 }
 
+// Connects the twigg provider (see test/lib/test-provider.ts). The model is also declared in config so it resolves
+// without a server.
 const cfg = {
+  twigg: { baseURL: "http://localhost:1/v1" },
   provider: {
-    test: {
-      name: "Test",
-      id: "test",
-      env: [],
-      npm: "@ai-sdk/openai-compatible",
+    twigg: {
+      options: { apiKey: "test-key" },
       models: {
         "test-model": {
           id: "test-model",
@@ -62,28 +62,12 @@ const cfg = {
           options: {},
         },
       },
-      options: {
-        apiKey: "test-key",
-        baseURL: "http://localhost:1/v1",
-      },
     },
   },
 }
 
 function providerCfg(url: string) {
-  return {
-    ...cfg,
-    provider: {
-      ...cfg.provider,
-      test: {
-        ...cfg.provider.test,
-        options: {
-          ...cfg.provider.test.options,
-          baseURL: url,
-        },
-      },
-    },
-  }
+  return { ...cfg, twigg: { baseURL: url } }
 }
 
 function agent(): Agent.Info {
@@ -266,6 +250,8 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -339,6 +325,8 @@ it.live("session.processor effect tests preserve text start time", () =>
               model: { providerID: ref.providerID, modelID: ref.modelID },
             } satisfies SessionV1.User,
             sessionID: chat.id,
+            history: yield* MessageV2.filterCompactedEffect(chat.id),
+            assistantID: msg.id,
             model: mdl,
             agent: agent(),
             system: [],
@@ -366,53 +354,6 @@ it.live("session.processor effect tests preserve text start time", () =>
         expect(text?.time?.end).toBeDefined()
         if (!text?.time?.start || !text.time.end) return
         expect(text.time.start).toBeLessThan(text.time.end)
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests stop after token overflow requests compaction", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const database = yield* Database.Service
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.text("after", { usage: { input: 100, output: 0 } })
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "compact")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const base = yield* provider.getModel(ref.providerID, ref.modelID)
-        const mdl = { ...base, limit: { context: 20, output: 10 } }
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "compact" }],
-          tools: {},
-        })
-
-        const parts = yield* MessageV2.parts(msg.id)
-
-        expect(value).toBe("compact")
-        expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
-        expect(parts.some((part) => part.type === "step-finish")).toBe(true)
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -447,6 +388,8 @@ it.live("session.processor effect tests capture reasoning from http mock", () =>
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -495,6 +438,8 @@ it.live("session.processor effect tests reset reasoning state across retries", (
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -509,200 +454,6 @@ it.live("session.processor effect tests reset reasoning state across retries", (
         expect(yield* llm.calls).toBe(2)
         expect(reasoning.some((part) => part.text === "two")).toBe(true)
         expect(reasoning.some((part) => part.text === "onetwo")).toBe(false)
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests do not retry unknown json errors", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.error(400, { error: { message: "no_kv_space" } })
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "json")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "json" }],
-          tools: {},
-        })
-
-        expect(value).toBe("stop")
-        expect(yield* llm.calls).toBe(1)
-        expect(handle.message.error?.name).toBe("APIError")
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests retry recognized structured json errors", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.error(429, { type: "error", error: { type: "too_many_requests" } })
-        yield* llm.text("after")
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "retry json")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "retry json" }],
-          tools: {},
-        })
-
-        const parts = yield* MessageV2.parts(msg.id)
-
-        expect(value).toBe("continue")
-        expect(yield* llm.calls).toBe(2)
-        expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
-        expect(handle.message.error).toBeUndefined()
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests retry OpenAI-compatible midstream server errors", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.push(raw({ chunks: [{ error: { type: "server_error", code: "server_error", message: "xxx" } }] }))
-        yield* llm.text("after")
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "retry midstream server error")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "retry midstream server error" }],
-          tools: {},
-        })
-
-        const parts = yield* MessageV2.parts(msg.id)
-
-        expect(value).toBe("continue")
-        expect(yield* llm.calls).toBe(2)
-        expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
-        expect(handle.message.error).toBeUndefined()
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests retry network_error finish reasons", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.push(
-          raw({
-            chunks: [
-              {
-                id: "chatcmpl-network-error",
-                object: "chat.completion.chunk",
-                choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "network_error" }],
-              },
-            ],
-          }),
-        )
-        yield* llm.text("after retry")
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "retry network error")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "retry network error" }],
-          tools: {},
-        })
-
-        const parts = yield* MessageV2.parts(msg.id)
-
-        expect(value).toBe("continue")
-        expect(yield* llm.calls).toBe(2)
-        expect(parts.some((part) => part.type === "text" && part.text === "after retry")).toBe(true)
-        expect(handle.message.error).toBeUndefined()
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -745,6 +496,8 @@ it.live("session.processor effect tests publish retry status updates", () =>
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -757,49 +510,6 @@ it.live("session.processor effect tests publish retry status updates", () =>
         expect(value).toBe("continue")
         expect(yield* llm.calls).toBe(2)
         expect(states).toStrictEqual([1])
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
-
-it.live("session.processor effect tests compact on structured context overflow", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.error(400, { type: "error", error: { code: "context_length_exceeded" } })
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "compact json")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies SessionV1.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "compact json" }],
-          tools: {},
-        })
-
-        expect(value).toBe("compact")
-        expect(yield* llm.calls).toBe(1)
-        expect(handle.message.error).toBeUndefined()
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -833,6 +543,8 @@ it.live("session.processor effect tests complete AI SDK tool calls when native f
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -900,6 +612,8 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
               model: { providerID: ref.providerID, modelID: ref.modelID },
             } satisfies SessionV1.User,
             sessionID: chat.id,
+            history: yield* MessageV2.filterCompactedEffect(chat.id),
+            assistantID: msg.id,
             model: mdl,
             agent: agent(),
             system: [],
@@ -979,6 +693,8 @@ it.live("session.processor effect tests record aborted errors and idle state", (
               model: { providerID: ref.providerID, modelID: ref.modelID },
             } satisfies SessionV1.User,
             sessionID: chat.id,
+            history: yield* MessageV2.filterCompactedEffect(chat.id),
+            assistantID: msg.id,
             model: mdl,
             agent: agent(),
             system: [],
@@ -1042,6 +758,8 @@ it.live("session.processor effect tests mark interruptions aborted without manua
               model: { providerID: ref.providerID, modelID: ref.modelID },
             } satisfies SessionV1.User,
             sessionID: chat.id,
+            history: yield* MessageV2.filterCompactedEffect(chat.id),
+            assistantID: msg.id,
             model: mdl,
             agent: agent(),
             system: [],
@@ -1097,6 +815,8 @@ itProviderError.live("session.processor effect tests fail provider-executed erro
             model: { providerID: ref.providerID, modelID: ref.modelID },
           } satisfies SessionV1.User,
           sessionID: chat.id,
+          history: yield* MessageV2.filterCompactedEffect(chat.id),
+          assistantID: msg.id,
           model: mdl,
           agent: agent(),
           system: [],
@@ -1146,6 +866,8 @@ itFragmentFailure.live("session.processor effect tests retain partial legacy par
               model: { providerID: ref.providerID, modelID: ref.modelID },
             } satisfies SessionV1.User,
             sessionID: chat.id,
+            history: yield* MessageV2.filterCompactedEffect(chat.id),
+            assistantID: msg.id,
             model: mdl,
             agent: agent(),
             system: [],

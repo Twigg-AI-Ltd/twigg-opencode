@@ -455,33 +455,38 @@ function finishOf(item: Sse) {
   })[0]
 }
 
-// The same scripted reply as Twigg SSE: `run`, blocks, then `done` (or `error`, or nothing for a hang).
+// The same scripted reply as Twigg SSE: `run`, blocks, then `done` (or `error`, or nothing for a hang). Content from
+// the reply's head is sent before its `wait` gate, the rest after it.
 function twiggFrames(item: Sse, run: { runID: string; chatID: string }) {
-  const out: string[] = []
   const calls: { tool_use_id: string; tool_name: string }[] = []
   const state = { block: undefined as string | undefined, usage: undefined as Usage | undefined }
-  const open = (kind: string, extra: Record<string, unknown> = {}) => {
-    if (state.block !== undefined) out.push(frame("block_stop", {}))
-    state.block = kind
-    out.push(frame("block_start", { kind, ...extra }))
+  const emit = (parts: unknown[]) => {
+    const out: string[] = []
+    const open = (kind: string, extra: Record<string, unknown> = {}) => {
+      if (state.block !== undefined) out.push(frame("block_stop", {}))
+      state.block = kind
+      out.push(frame("block_start", { kind, ...extra }))
+    }
+    for (const part of flow({ ...item, head: parts, tail: [] })) {
+      if (part.type === "text") {
+        if (state.block !== "text") open("text")
+        out.push(frame("delta", { kind: "text", text: part.text }))
+      }
+      if (part.type === "reason") {
+        if (state.block !== "reasoning") open("reasoning")
+        out.push(frame("delta", { kind: "reasoning", text: part.text }))
+      }
+      if (part.type === "tool-start") {
+        calls.push({ tool_use_id: part.id, tool_name: part.name })
+        open("tool_call", { tool_name: part.name, tool_use_id: part.id })
+      }
+      if (part.type === "tool-args") out.push(frame("delta", { kind: "tool_input", text: part.text }))
+      if (part.type === "usage") state.usage = part.usage
+    }
+    return out
   }
-  for (const part of flow(item)) {
-    if (part.type === "text") {
-      if (state.block !== "text") open("text")
-      out.push(frame("delta", { kind: "text", text: part.text }))
-    }
-    if (part.type === "reason") {
-      if (state.block !== "reasoning") open("reasoning")
-      out.push(frame("delta", { kind: "reasoning", text: part.text }))
-    }
-    if (part.type === "tool-start") {
-      calls.push({ tool_use_id: part.id, tool_name: part.name })
-      open("tool_call", { tool_name: part.name, tool_use_id: part.id })
-    }
-    if (part.type === "tool-args") out.push(frame("delta", { kind: "tool_input", text: part.text }))
-    if (part.type === "usage") state.usage = part.usage
-  }
-  const head = [frame("run", { run_id: run.runID, chat_id: run.chatID, closed_tool_calls: [] })]
+  const head = [frame("run", { run_id: run.runID, chat_id: run.chatID, closed_tool_calls: [] }), ...emit(item.head)]
+  const out = emit(item.tail)
   if (item.hang) return { head, tail: out }
   if (item.error !== undefined)
     return {

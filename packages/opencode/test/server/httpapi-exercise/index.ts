@@ -1429,7 +1429,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/session/{sessionID}/init", { sessionID: ctx.state.session.id }),
       headers: ctx.headers(),
-      body: { providerID: "test", modelID: "test-model", messageID: ctx.state.message.info.id },
+      body: { providerID: "twigg", modelID: "test-model", messageID: ctx.state.message.info.id },
     }))
     .jsonEffect(200, (body, ctx) =>
       Effect.gen(function* () {
@@ -1454,7 +1454,7 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: {
         agent: "build",
-        model: { providerID: "test", modelID: "test-model" },
+        model: { providerID: "twigg", modelID: "test-model" },
         parts: [{ type: "text", text: "hello llm" }],
       },
     }))
@@ -1489,7 +1489,7 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: {
         agent: "build",
-        model: { providerID: "test", modelID: "test-model" },
+        model: { providerID: "twigg", modelID: "test-model" },
         parts: [{ type: "text", text: "hello async" }],
       },
     }))
@@ -1513,7 +1513,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/session/{sessionID}/command", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
-      body: { command: "init", arguments: "", model: "test/test-model" },
+      body: { command: "init", arguments: "", model: "twigg/test-model" },
     }))
     .jsonEffect(
       200,
@@ -1533,7 +1533,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/session/{sessionID}/shell", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
-      body: { agent: "build", model: { providerID: "test", modelID: "test-model" }, command: "printf shell-ok" },
+      body: { agent: "build", model: { providerID: "twigg", modelID: "test-model" }, command: "printf shell-ok" },
     }))
     .json(
       200,
@@ -1580,7 +1580,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
-      body: { providerID: "test", modelID: "test-model", auto: false },
+      body: { providerID: "twigg", modelID: "test-model", auto: false },
     }))
     .jsonEffect(
       200,
