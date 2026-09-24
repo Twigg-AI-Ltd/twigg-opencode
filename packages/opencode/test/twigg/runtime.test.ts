@@ -565,6 +565,20 @@ describe("twigg delta", () => {
     })
   })
 
+  test("a new chat starts from the prompts after the last assistant reply", () => {
+    const history = [
+      user("msg_1", [{ type: "text", text: "asked another provider" }]),
+      assistant("msg_2", [{ type: "text", text: "answer" }, completed("call_1", "out")]),
+      user("msg_3", [{ type: "text", text: "first try" }]),
+      assistant("msg_4", []),
+      user("msg_5", [{ type: "text", text: "now on twigg" }]),
+    ]
+    expect(TwiggRuntime.delta(history, undefined, media).input).toEqual([
+      { type: "prompt", text: "first try" },
+      { type: "prompt", text: "now on twigg" },
+    ])
+  })
+
   test("turns attachments into media, or a note when they can't be sent", () => {
     const png = { mime: "image/png", url: "data:image/png;base64,iVBORw0K", filename: "shot.png" }
     const history = [
@@ -576,7 +590,7 @@ describe("twigg delta", () => {
       ]),
       assistant("msg_2", [completed("call_1", "screenshot taken", { attachments: [{ type: "file", ...png }] })]),
     ]
-    expect(TwiggRuntime.delta(history, undefined, media).input).toEqual([
+    expect(TwiggRuntime.delta(history, "msg_0", media).input).toEqual([
       {
         type: "tool_result",
         tool_use_id: "call_1",

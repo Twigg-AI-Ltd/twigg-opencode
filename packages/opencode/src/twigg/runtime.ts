@@ -183,7 +183,14 @@ export function delta(
   cursor: string | undefined,
   media: typeof MediaLimits.Type | undefined,
 ) {
-  const fresh = history.filter((message) => cursor === undefined || message.info.id > cursor)
+  // Without a cursor the chat is new, but the session may not be: a fork, or a session that used another provider
+  // before. A new chat has no open tool calls, and replaying the old transcript as prompts would garble it, so it
+  // starts from the prompts after the last assistant reply.
+  const start =
+    cursor === undefined
+      ? history.findLastIndex((message) => message.info.role === "assistant" && message.parts.length > 0) + 1
+      : 0
+  const fresh = history.slice(start).filter((message) => cursor === undefined || message.info.id > cursor)
   const input: Part[] = [
     ...fresh
       .filter((message) => message.info.role === "assistant")
