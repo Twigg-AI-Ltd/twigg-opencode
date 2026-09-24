@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
 import { Session } from "@/session/session"
+import { TwiggSync } from "@/twigg/sync"
 import { SessionID } from "../../session/schema"
 import { UI } from "../ui"
 import { Locale } from "@/util/locale"
@@ -59,7 +60,9 @@ export const SessionDeleteCommand = effectCmd({
     }),
   handler: Effect.fn("Cli.session.delete")(function* (args) {
     const svc = yield* Session.Service
+    const twigg = yield* TwiggSync.Service
     const sessionID = SessionID.make(args.sessionID)
+    yield* twigg.forget(sessionID)
     yield* svc
       .remove(sessionID)
       .pipe(Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)))

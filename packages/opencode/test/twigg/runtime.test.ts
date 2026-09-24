@@ -165,6 +165,7 @@ function memoryChat(initial?: TwiggRuntime.State) {
       }),
     open: Effect.succeed({ namespace: "twigg-code/test/p/project", user_metadata: { session_id: sessionID } }),
     repair: (id, rows) => Effect.sync(() => void store.repaired.push({ id, rows: [...rows] })),
+    tag: { install: "install_1", session_id: sessionID },
   }
   return { store, chat }
 }
@@ -265,6 +266,7 @@ describe("twigg runtime", () => {
         idempotency_key: "msg_a1",
         max_tokens: 1000,
         reasoning_effort: "low",
+        user_metadata: { install: "install_1", session_id: sessionID },
       })
       expect(store.state).toEqual({
         chat_id: "chat_1",
@@ -404,12 +406,19 @@ describe("twigg runtime", () => {
     Effect.gen(function* () {
       const running = { id: "run_9", status: "running", error: null, cost: null, usage: null }
       const rows = [
-        { ordinal: 1, role: "user", part: { type: "prompt", text: "hi" } },
-        { ordinal: 2, role: "assistant", part: { type: "message", text: "the full answer" } },
+        { ordinal: 1, created_at: "2026-09-24T10:00:00Z", role: "user", part: { type: "prompt", text: "hi" } },
+        {
+          ordinal: 2,
+          created_at: "2026-09-24T10:00:00Z",
+          role: "assistant",
+          part: { type: "message", text: "the full answer" },
+        },
       ]
       const server = twigg({
         "GET /runs/run_9": [Response.json(running), Response.json({ ...running, status: "succeeded" })],
-        "GET /chats/chat_1/history": [Response.json({ data: rows, has_more: false })],
+        "GET /chats/chat_1/history": [
+          Response.json({ data: rows, first_ordinal: 1, last_ordinal: 2, has_more: false }),
+        ],
         "POST /chats/chat_1/responses": [sse([run("run_10"), ...text("ok"), done()])],
       })
       const { store, chat } = memoryChat({
@@ -456,15 +465,28 @@ describe("twigg runtime", () => {
         "GET /chats/chat_1/history": [
           Response.json({
             data: [
-              { ordinal: 1, role: "user", part: { type: "prompt", text: "hi" } },
-              { ordinal: 2, role: "assistant", part: { type: "reasoning", text: "thinking" } },
-              { ordinal: 3, role: "assistant", part: { type: "message", text: "reading" } },
+              { ordinal: 1, created_at: "2026-09-24T10:00:00Z", role: "user", part: { type: "prompt", text: "hi" } },
+              {
+                ordinal: 2,
+                created_at: "2026-09-24T10:00:00Z",
+                role: "assistant",
+                part: { type: "reasoning", text: "thinking" },
+              },
+              {
+                ordinal: 3,
+                created_at: "2026-09-24T10:00:00Z",
+                role: "assistant",
+                part: { type: "message", text: "reading" },
+              },
               {
                 ordinal: 4,
+                created_at: "2026-09-24T10:00:00Z",
                 role: "assistant",
                 part: { type: "tool_call", tool_use_id: "call_1", tool_name: "read", arguments: '{"path":"b.ts"}' },
               },
             ],
+            first_ordinal: 1,
+            last_ordinal: 4,
             has_more: false,
           }),
         ],

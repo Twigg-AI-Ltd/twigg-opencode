@@ -34,6 +34,7 @@ import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
+import { TwiggSync } from "@/twigg/sync"
 import { SessionRunState } from "@/session/run-state"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
@@ -242,6 +243,7 @@ const app = LayerNode.group([
   SessionProcessor.node,
   SessionCompaction.node,
   SessionRevert.node,
+  TwiggSync.node,
   SessionSummary.node,
   SessionPrompt.node,
   Instruction.node,

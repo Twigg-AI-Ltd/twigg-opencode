@@ -38,6 +38,7 @@ import {
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import { TwiggModels } from "@/twigg/models"
+import { TwiggSync } from "@/twigg/sync"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -61,8 +62,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
+    const twiggSync = yield* TwiggSync.Service
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
+      // Chats found on Twigg arrive as new sessions through the usual session events, so listing doesn't wait.
+      yield* twiggSync.discover().pipe(Effect.forkIn(scope))
       const directory = ctx.query.directory ? yield* InstanceState.directory : undefined
       return yield* session.list({
         directory: ctx.query.scope === "project" ? undefined : directory,
@@ -129,6 +133,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         })
       }
       yield* requireSession(ctx.params.sessionID)
+      // A twigg session's history lives on Twigg; bring the local copy up to date before reading it.
+      if (!ctx.query.before) yield* twiggSync.load(ctx.params.sessionID)
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
         return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       }
@@ -189,6 +195,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* twiggSync.forget(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })

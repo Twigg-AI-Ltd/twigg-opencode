@@ -28,6 +28,10 @@ export const State = Schema.Struct({
   orphan: Schema.optional(Schema.Struct({ run_id: Schema.String, message_id: Schema.String })),
   // Hash of the last context block the chat received, so it is only sent again when it changes.
   context_hash: Schema.optional(Schema.String),
+  // Set on a session created from a chat found on Twigg; its history is imported when it is first opened.
+  stub: Schema.optional(Schema.Boolean),
+  // The newest history ordinal that TwiggSync has seen, for catching up with parts written elsewhere.
+  synced_ordinal: Schema.optional(Schema.Number),
 })
 export type State = typeof State.Type
 
@@ -40,6 +44,8 @@ export interface Chat {
   readonly open: Effect.Effect<{ readonly namespace: string; readonly user_metadata: Record<string, unknown> }>
   // Replaces an interrupted local message's content with what its orphaned run actually produced.
   readonly repair: (messageID: string, rows: readonly TwiggClient.HistoryRow[]) => Effect.Effect<void>
+  // Sent as user_metadata, so every part this session writes can be told apart from parts written elsewhere.
+  readonly tag: Record<string, string>
 }
 
 export interface Input {
@@ -118,6 +124,7 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
           max_tokens: input.maxTokens,
           reasoning_effort: input.reasoningEffort,
           tools: definitions(input.tools),
+          user_metadata: input.chat.tag,
         },
       })
       return translate(events, {
@@ -212,6 +219,7 @@ export const sessionChat = Effect.fn("TwiggRuntime.sessionChat")(function* (inpu
   const sessions = yield* Session.Service
   const fs = yield* FSUtil.Service
   const ctx = yield* InstanceState.context
+  const install = yield* TwiggNamespace.installID().pipe(Effect.provideService(FSUtil.Service, fs))
   const load = (sessionID: SessionID) =>
     sessions.get(sessionID).pipe(
       Effect.orDie,
@@ -230,7 +238,7 @@ export const sessionChat = Effect.fn("TwiggRuntime.sessionChat")(function* (inpu
       const project = TwiggNamespace.namespaceFor({
         projectID: ctx.project.id,
         directory: ctx.directory,
-        profile: yield* TwiggNamespace.installID().pipe(Effect.provideService(FSUtil.Service, fs)),
+        profile: install,
         device: input.device,
       })
       const parent = input.parentSessionID ? yield* load(input.parentSessionID) : undefined
@@ -249,6 +257,7 @@ export const sessionChat = Effect.fn("TwiggRuntime.sessionChat")(function* (inpu
       }
     }),
     repair: (messageID, rows) => repair(sessions, input.sessionID, messageID, rows),
+    tag: tag(install, input.sessionID),
   } satisfies Chat
 })
 
@@ -694,6 +703,11 @@ const repair = Effect.fnUntraced(function* (
     } satisfies SessionV1.ToolPart)
   })
 })
+
+// The install ID tells machines apart. The session ID alone can't: an imported session reuses its origin's ID.
+export function tag(install: string, sessionID: string) {
+  return { install, session_id: sessionID }
+}
 
 function landed(error: unknown): error is TwiggClient.ConflictError & { readonly runID: string } {
   return isTwiggError(error) && error._tag === "TwiggConflictError" && error.reason === "idempotency" && !!error.runID

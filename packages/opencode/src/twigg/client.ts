@@ -140,7 +140,16 @@ export type Run = typeof Run.Type
 // One ledger row from GET /chats/{id}/history. Tool-call `arguments` is a JSON string.
 export const HistoryRow = Schema.Struct({
   ordinal: Schema.Number,
+  created_at: Schema.String,
   role: Schema.String,
+  // What the request that wrote this part sent as user_metadata. opencode tags its own requests with it.
+  user_metadata: Schema.optional(Schema.Unknown),
+  // Attachment stubs (no bytes unless include=full).
+  media: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(Schema.Struct({ mime: Schema.String, filename: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
+  ),
   part: Schema.Union([
     Schema.Struct({ type: Schema.Literal("prompt"), text: Schema.String }),
     Schema.Struct({
@@ -149,6 +158,8 @@ export const HistoryRow = Schema.Struct({
       tool_name: Schema.String,
       text: Schema.String,
       is_error: Schema.Boolean,
+      // Set when Twigg closed a call whose result never arrived.
+      tombstone_reason: Schema.optional(Schema.NullOr(Schema.String)),
     }),
     Schema.Struct({
       type: Schema.Literal("message"),
@@ -166,7 +177,29 @@ export const HistoryRow = Schema.Struct({
 })
 export type HistoryRow = typeof HistoryRow.Type
 
-export const HistoryPage = Schema.Struct({ data: Schema.Array(HistoryRow), has_more: Schema.Boolean })
+// `data` is oldest first whichever way it was paged. `has_more` is about the paging direction.
+export const HistoryPage = Schema.Struct({
+  data: Schema.Array(HistoryRow),
+  first_ordinal: Schema.NullOr(Schema.Number),
+  last_ordinal: Schema.NullOr(Schema.Number),
+  has_more: Schema.Boolean,
+})
+
+export const ChatSummary = Schema.Struct({
+  id: Schema.String,
+  namespace: Schema.NullOr(Schema.String),
+  title: Schema.NullOr(Schema.String),
+  user_metadata: Schema.optional(Schema.Unknown),
+  created_at: Schema.String,
+})
+export type ChatSummary = typeof ChatSummary.Type
+
+// Newest first.
+export const ChatPage = Schema.Struct({
+  data: Schema.Array(ChatSummary),
+  last_id: Schema.NullOr(Schema.String),
+  has_more: Schema.Boolean,
+})
 
 const EVENTS = new Set<string>(Event.members.map((member) => member.fields.event.literal))
 const decodeEvent = Schema.decodeUnknownEffect(Event)
