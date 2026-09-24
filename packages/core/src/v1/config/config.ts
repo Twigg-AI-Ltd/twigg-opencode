@@ -16,6 +16,7 @@ import { ConfigPluginV1 } from "./plugin"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
+import { ConfigTwiggV1 } from "./twigg"
 
 export type Layout = ConfigLayoutV1.Layout
 
@@ -130,6 +131,7 @@ export const Info = Schema.Struct({
   attachment: Schema.optional(ConfigAttachmentV1.Info).annotate({
     description: "Attachment processing configuration, including image size limits and resizing behavior",
   }),
+  twigg: Schema.optional(ConfigTwiggV1.Info).annotate({ description: "Twigg API settings" }),
   enterprise: Schema.optional(
     Schema.Struct({ url: Schema.optional(Schema.String).annotate({ description: "Enterprise URL" }) }),
   ),

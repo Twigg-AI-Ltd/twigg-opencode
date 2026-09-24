@@ -2007,6 +2007,11 @@ export type Config = {
     [key: string]: boolean
   }
   attachment?: AttachmentConfig
+  twigg?: {
+    profile?: string
+    device?: string
+    baseURL?: string
+  }
   enterprise?: {
     url?: string
   }
