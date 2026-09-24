@@ -1,6 +1,6 @@
 import { EOL } from "os"
 import { Effect } from "effect"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { TwiggModels } from "@/twigg/models"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -20,13 +20,13 @@ export const ModelsCommand = effectCmd({
         type: "boolean",
       })
       .option("refresh", {
-        describe: "refresh the models cache from models.dev",
+        describe: "refresh the model list from Twigg",
         type: "boolean",
       }),
   handler: Effect.fn("Cli.models")(function* (args) {
     const { Provider } = yield* Effect.promise(() => import("@/provider/provider"))
     if (args.refresh) {
-      yield* ModelsDev.Service.use((s) => s.refresh(true))
+      yield* TwiggModels.clearCache()
       UI.println(UI.Style.TEXT_SUCCESS_BOLD + "Models cache refreshed" + UI.Style.TEXT_NORMAL)
     }
 
@@ -53,14 +53,6 @@ export const ModelsCommand = effectCmd({
       return
     }
 
-    const ids = Object.keys(providers).sort((a, b) => {
-      const aIsOpencode = a.startsWith("opencode")
-      const bIsOpencode = b.startsWith("opencode")
-      if (aIsOpencode && !bIsOpencode) return -1
-      if (!aIsOpencode && bIsOpencode) return 1
-      return a.localeCompare(b)
-    })
-
-    for (const providerID of ids) print(ProviderV2.ID.make(providerID), args.verbose)
+    for (const providerID of Object.keys(providers).sort()) print(ProviderV2.ID.make(providerID), args.verbose)
   }),
 })

@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { APICallError } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
-import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
 
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
@@ -409,89 +408,6 @@ describe("session.message-v2.toModelMessage", () => {
         ],
       },
     ])
-  })
-
-  test("preserves jpeg tool-result media for anthropic models", async () => {
-    const anthropicModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("anthropic/claude-opus-4-7"),
-      providerID: ProviderV2.ID.make("anthropic"),
-      api: {
-        id: "claude-opus-4-7-20250805",
-        url: "https://api.anthropic.com",
-        npm: "@ai-sdk/anthropic",
-      },
-      capabilities: {
-        ...model.capabilities,
-        attachment: true,
-        input: {
-          ...model.capabilities.input,
-          image: true,
-          pdf: true,
-        },
-      },
-    }
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]).toString(
-      "base64",
-    )
-    const userID = "m-user-anthropic"
-    const assistantID = "m-assistant-anthropic"
-    const input: SessionV1.WithParts[] = [
-      {
-        info: userInfo(userID),
-        parts: [
-          {
-            ...basePart(userID, "u1-anthropic"),
-            type: "text",
-            text: "run tool",
-          },
-        ] as SessionV1.Part[],
-      },
-      {
-        info: assistantInfo(assistantID, userID),
-        parts: [
-          {
-            ...basePart(assistantID, "a1-anthropic"),
-            type: "tool",
-            callID: "call-anthropic-1",
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "/tmp/rails-demo.png" },
-              output: "Image read successfully",
-              title: "Read",
-              metadata: {},
-              time: { start: 0, end: 1 },
-              attachments: [
-                {
-                  ...basePart(assistantID, "file-anthropic-1"),
-                  type: "file",
-                  mime: "image/jpeg",
-                  filename: "rails-demo.png",
-                  url: `data:image/jpeg;base64,${jpeg}`,
-                },
-              ],
-            },
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    const result = ProviderTransform.message(await MessageV2.toModelMessages(input, anthropicModel), anthropicModel, {})
-    expect(result).toHaveLength(3)
-    expect(result[2].role).toBe("tool")
-    expect(result[2].content[0]).toMatchObject({
-      type: "tool-result",
-      toolCallId: "call-anthropic-1",
-      toolName: "read",
-      output: {
-        type: "content",
-        value: [
-          { type: "text", text: "Image read successfully" },
-          { type: "media", mediaType: "image/jpeg", data: jpeg },
-        ],
-      },
-    })
   })
 
   test("moves bedrock pdf tool-result media into a separate user message", async () => {
@@ -1036,79 +952,6 @@ describe("session.message-v2.toModelMessage", () => {
         content: [
           { type: "reasoning", text: "thinking", providerOptions: undefined },
           { type: "text", text: "partial answer" },
-        ],
-      },
-    ])
-  })
-
-  test("preserves OpenRouter reasoning details through provider transform", async () => {
-    const assistantID = "m-assistant"
-    const openrouterModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("deepseek/deepseek-v4-pro"),
-      providerID: ProviderV2.ID.make("openrouter"),
-      api: {
-        id: "deepseek/deepseek-v4-pro",
-        url: "https://openrouter.ai/api/v1",
-        npm: "@openrouter/ai-sdk-provider",
-      },
-      capabilities: {
-        ...model.capabilities,
-        reasoning: true,
-        interleaved: { field: "reasoning_details" },
-      },
-    }
-    const reasoningDetails = [
-      {
-        type: "reasoning.text",
-        text: "thinking",
-        format: "unknown",
-        index: 0,
-      },
-    ]
-    const input: SessionV1.WithParts[] = [
-      {
-        info: assistantInfo(assistantID, "m-parent", undefined, {
-          providerID: openrouterModel.providerID,
-          modelID: openrouterModel.id,
-        }),
-        parts: [
-          {
-            ...basePart(assistantID, "a1"),
-            type: "reasoning",
-            text: "thinking",
-            time: { start: 0 },
-            metadata: {
-              openrouter: {
-                reasoning_details: reasoningDetails,
-              },
-            },
-          },
-          {
-            ...basePart(assistantID, "a2"),
-            type: "text",
-            text: "answer",
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    expect(
-      ProviderTransform.message(await MessageV2.toModelMessages(input, openrouterModel), openrouterModel, {}),
-    ).toStrictEqual([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "reasoning",
-            text: "thinking",
-            providerOptions: {
-              openrouter: {
-                reasoning_details: reasoningDetails,
-              },
-            },
-          },
-          { type: "text", text: "answer" },
         ],
       },
     ])

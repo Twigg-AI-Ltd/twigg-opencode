@@ -15,7 +15,6 @@ import { Config } from "@/config/config"
 import type { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { SessionID } from "@/session/schema"
-import { Auth } from "@/auth"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TwiggModels } from "@/twigg/models"
 import { TwiggRuntime } from "@/twigg/runtime"
@@ -57,7 +56,6 @@ export const use = serviceUse(Service)
 const live: Layer.Layer<
   Service,
   never,
-  | Auth.Service
   | Config.Service
   | Provider.Service
   | Plugin.Service
@@ -69,7 +67,6 @@ const live: Layer.Layer<
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const auth = yield* Auth.Service
     const config = yield* Config.Service
     const provider = yield* Provider.Service
     const plugin = yield* Plugin.Service
@@ -92,18 +89,10 @@ const live: Layer.Layer<
       })
       if (input.model.providerID !== TwiggModels.PROVIDER_ID)
         return yield* Effect.die(new Error(`Only Twigg models are supported, not ${input.model.providerID}`))
-      const [cfg, item, info] = yield* Effect.all(
-        [config.get(), provider.getProvider(input.model.providerID), auth.get(input.model.providerID)],
-        { concurrency: "unbounded" },
-      )
-      const prepared = yield* LLMRequestPrep.prepare({
-        ...input,
-        provider: item,
-        auth: info,
-        plugin,
-        flags,
-        isWorkflow: false,
+      const [cfg, item] = yield* Effect.all([config.get(), provider.getProvider(input.model.providerID)], {
+        concurrency: "unbounded",
       })
+      const prepared = yield* LLMRequestPrep.prepare({ ...input, provider: item, plugin, flags })
       const settings = TwiggModels.settings(item)
       if (!settings) return yield* Effect.die(new Error(`Set ${TwiggModels.ENV_KEY} or log in to Twigg first`))
       const variant = input.user.model.variant ? input.model.variants?.[input.user.model.variant] : undefined
@@ -171,7 +160,6 @@ export const node = LayerNode.make({
   service: Service,
   layer: live,
   deps: [
-    Auth.node,
     Config.node,
     Provider.node,
     Plugin.node,

@@ -108,6 +108,16 @@ const layer = Layer.effect(
   }),
 )
 
+// Drops the cached model lists so the next load asks Twigg again.
+export const clearCache = Effect.fn("TwiggModels.clearCache")(function* () {
+  const fs = yield* FSUtil.Service
+  const files = yield* fs.readDirectory(Global.Path.cache).pipe(Effect.catch(() => Effect.succeed([] as string[])))
+  yield* Effect.forEach(
+    files.filter((file) => file.startsWith("twigg-models-")),
+    (file) => fs.remove(path.join(Global.Path.cache, file)).pipe(Effect.ignore),
+  )
+})
+
 export const node = makeGlobalNode({ service: Service, layer, deps: [FSUtil.node, httpClient] })
 
 export function preferredModel(models: Record<string, unknown>) {

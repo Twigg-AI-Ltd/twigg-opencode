@@ -17,7 +17,6 @@ import type {
   PullRequestEvent,
 } from "@octokit/webhooks-types"
 import { UI } from "../ui"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
@@ -158,7 +157,9 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
   const maybeCtx = yield* InstanceRef
   if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
   const ctx = maybeCtx
-  const modelsDev = yield* ModelsDev.Service
+  const { Provider } = yield* Effect.promise(() => import("@/provider/provider"))
+  const registry = yield* Provider.Service
+  const connected = yield* registry.list()
   const gitSvc = yield* Git.Service
   yield* Effect.promise(async () => {
     {
@@ -167,11 +168,12 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
       const app = await getAppInfo()
       await installGitHubApp()
 
-      const providers = await Effect.runPromise(modelsDev.get()).then((p) => {
-        // TODO: add guide for copilot, for now just hide it
-        delete p["github-copilot"]
-        return p
-      })
+      // Twigg is the only provider, and its models depend on the account, so it must be connected here first.
+      const providers = connected
+      if (Object.keys(providers).length === 0) {
+        prompts.log.error("Connect Twigg first: opencode providers login")
+        throw new UI.CancelledError()
+      }
 
       const provider = await promptProvider()
       const model = await promptModel()

@@ -1,12 +1,11 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { Auth } from "@/auth"
 import { TwiggClient } from "@/twigg/client"
 import { TwiggModels } from "@/twigg/models"
 
-import { mapValues, pickBy } from "remeda"
+import { pickBy } from "remeda"
 import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -43,25 +42,16 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
-      const all = yield* ModelsDev.Service.use((s) => s.get())
-      const disabled = new Set(config.disabled_providers ?? [])
-      const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-      const filtered: Record<string, (typeof all)[string]> = {}
-      for (const [key, value] of Object.entries(all)) {
-        if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
-      }
       const connected = yield* provider.list()
       const credentials = yield* authStore.all().pipe(Effect.orDie)
-      // Twigg isn't in models.dev, so list it (without models until a key is set) for the connect dialog.
-      const twigg =
-        (enabled ? enabled.has(TwiggModels.PROVIDER_ID) : true) && !disabled.has(TwiggModels.PROVIDER_ID)
-          ? { [TwiggModels.PROVIDER_ID]: TwiggModels.toProvider([], TwiggClient.DEFAULT_BASE_URL) }
-          : {}
-      const providers = Object.assign(
-        mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
-        twigg,
-        connected,
-      )
+      const allowed =
+        (config.enabled_providers?.includes(TwiggModels.PROVIDER_ID) ?? true) &&
+        !config.disabled_providers?.includes(TwiggModels.PROVIDER_ID)
+      // Twigg is the only provider. It's listed without models until a key is set, so the connect dialog offers it.
+      const providers: Record<string, Provider.Info> = {
+        ...(allowed ? { [TwiggModels.PROVIDER_ID]: TwiggModels.toProvider([], TwiggClient.DEFAULT_BASE_URL) } : {}),
+        ...connected,
+      }
       return {
         all: Object.values(providers).map(Provider.toPublicInfo),
         default: Provider.defaultModelIDs(pickBy(providers, (item) => Object.keys(item.models).length > 0)),

@@ -4,13 +4,8 @@ import { Config } from "@/config/config"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Provider } from "@/provider/provider"
 
-import { generateObject, streamObject, type ModelMessage } from "ai"
 import { Truncate } from "@/tool/truncate"
-import { Auth } from "../auth"
-import { ProviderTransform } from "@/provider/transform"
 
-import PROMPT_GENERATE from "./generate.txt"
-import { TwiggModels } from "@/twigg/models"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
@@ -19,12 +14,9 @@ import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
 import path from "path"
-import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
 import { Effect, Context, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
-import * as Option from "effect/Option"
-import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { AbsolutePath, type DeepMutable } from "@opencode-ai/core/schema"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -56,12 +48,6 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
-const GeneratedAgent = Schema.Struct({
-  identifier: Schema.String,
-  whenToUse: Schema.String,
-  systemPrompt: Schema.String,
-})
-
 export interface Interface {
   readonly get: (agent: string) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Info[]>
@@ -90,8 +76,6 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
-    const auth = yield* Auth.Service
-    const plugin = yield* Plugin.Service
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
     const locations = yield* LocationServiceMap.Service
@@ -370,77 +354,13 @@ const layer = Layer.effect(
         description: string
         model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       }) {
-        const cfg = yield* config.get()
         const model = input.model ?? (yield* provider.defaultModel())
-        const resolved = yield* provider.getModel(model.providerID, model.modelID)
-        // TODO(twigg-api#5): generating an agent is a one-off model call, which needs Twigg's throwaway calls.
-        if (resolved.api.npm === TwiggModels.NPM)
-          return yield* Effect.die(
-            new Error(
-              "Generating agents with Twigg is coming soon. For now, write the agent's markdown file yourself.",
-            ),
-          )
-        const language = yield* provider.getLanguage(resolved)
-        const tracer = cfg.experimental?.openTelemetry
-          ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
-          : undefined
-
-        const system = [PROMPT_GENERATE]
-        yield* plugin.trigger("experimental.chat.system.transform", { model: resolved }, { system })
-        const existing = yield* InstanceState.useEffect(state, (s) => s.list())
-
-        // TODO: clean this up so provider specific logic doesnt bleed over
-        const authInfo = yield* auth.get(model.providerID).pipe(Effect.orDie)
-        const isOpenaiOauth = model.providerID === "openai" && authInfo?.type === "oauth"
-
-        const params = {
-          experimental_telemetry: {
-            isEnabled: cfg.experimental?.openTelemetry,
-            tracer,
-            metadata: {
-              userId: cfg.username ?? "unknown",
-            },
-          },
-          temperature: 0.3,
-          messages: [
-            ...(isOpenaiOauth
-              ? []
-              : system.map(
-                  (item): ModelMessage => ({
-                    role: "system",
-                    content: item,
-                  }),
-                )),
-            {
-              role: "user",
-              content: `Create an agent configuration based on this request: "${input.description}".\n\nIMPORTANT: The following identifiers already exist and must NOT be used: ${existing.map((i) => i.name).join(", ")}\n  Return ONLY the JSON object, no other text, do not wrap in backticks`,
-            },
-          ],
-          model: language,
-          schema: Object.assign(
-            Schema.toStandardSchemaV1(GeneratedAgent),
-            Schema.toStandardJSONSchemaV1(GeneratedAgent),
-          ),
-        } satisfies Parameters<typeof generateObject>[0]
-
-        if (isOpenaiOauth) {
-          return yield* Effect.promise(async () => {
-            const result = streamObject({
-              ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, {
-                instructions: system.join("\n"),
-                store: false,
-              }),
-              onError: () => {},
-            })
-            for await (const part of result.fullStream) {
-              if (part.type === "error") throw part.error
-            }
-            return result.object
-          })
-        }
-
-        return yield* Effect.promise(() => generateObject(params).then((r) => r.object))
+        yield* provider.getModel(model.providerID, model.modelID)
+        // TODO(twigg-api#5): generating an agent is a one-off model call, which needs Twigg's throwaway calls. Rebuild
+        // it on TwiggPending.respondOnce with the ./generate.txt prompt and an {identifier, whenToUse, systemPrompt} schema.
+        return yield* Effect.die(
+          new Error("Generating agents with Twigg is coming soon. For now, write the agent's markdown file yourself."),
+        )
       }),
     })
   }),
@@ -455,7 +375,7 @@ const locationServiceMapNode = LayerNode.make({
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode],
+  deps: [Config.node, Skill.node, Provider.node, locationServiceMapNode],
 })
 
 export * as Agent from "./agent"

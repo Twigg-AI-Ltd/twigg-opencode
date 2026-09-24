@@ -2,7 +2,7 @@ import type { Config } from "@/config/config"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { Provider } from "@/provider/provider"
-import { ProviderTransform } from "@/provider/transform"
+import { LLMRequestPrep } from "./llm/request"
 import { TwiggModels } from "@/twigg/models"
 import type { MessageV2 } from "./message-v2"
 
@@ -14,10 +14,10 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
 
   const reserved =
     input.cfg.compaction?.reserved ??
-    Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+    Math.min(COMPACTION_BUFFER, LLMRequestPrep.maxOutputTokens(input.model, input.outputTokenMax))
   return input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
-    : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+    : Math.max(0, context - LLMRequestPrep.maxOutputTokens(input.model, input.outputTokenMax))
 }
 
 export function isOverflow(input: {

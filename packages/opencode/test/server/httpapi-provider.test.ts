@@ -32,12 +32,6 @@ function providerListHasFetch(list: unknown) {
   })
 }
 
-function hasProviderWithFetch(input: unknown, key: "all" | "providers") {
-  if (typeof input !== "object" || input === null) return false
-  if (key === "all") return "all" in input && providerListHasFetch(input.all)
-  return "providers" in input && providerListHasFetch(input.providers)
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -50,24 +44,6 @@ function providerList(input: unknown, key: "all" | "providers") {
 
 function providerByID(input: unknown, key: "all" | "providers", id: string) {
   return providerList(input, key).find((provider) => isRecord(provider) && provider.id === id)
-}
-
-function hasNonZeroModelCost(input: unknown, key: "all" | "providers", id: string) {
-  const provider = providerByID(input, key, id)
-  if (!isRecord(provider) || !isRecord(provider.models)) return false
-  return Object.values(provider.models).some((model) => {
-    if (!isRecord(model) || !isRecord(model.cost) || !isRecord(model.cost.cache)) return false
-    return [model.cost.input, model.cost.output, model.cost.cache.read, model.cost.cache.write].some(
-      (cost) => typeof cost === "number" && cost > 0,
-    )
-  })
-}
-
-function hasProviderMutationMarker(input: unknown, key: "all" | "providers", id: string) {
-  const provider = providerByID(input, key, id)
-  if (!isRecord(provider)) return false
-  if (provider.name === "mutated-provider") return true
-  return isRecord(provider.options) && provider.options.mutatedByPlugin === true
 }
 
 function requestAuthorize(input: {
@@ -349,53 +325,5 @@ describe("provider HttpApi", () => {
     }),
     projectOptions,
     30000,
-  )
-
-  it.instance(
-    "serves provider lists when auth loaders add runtime fetch options",
-    Effect.gen(function* () {
-      const directory = (yield* TestInstance).directory
-      yield* setEnvScoped(
-        "OPENCODE_AUTH_CONTENT",
-        JSON.stringify({
-          google: { type: "oauth", refresh: "dummy", access: "dummy", expires: 9999999999999 },
-        }),
-      )
-      const headers = { "x-opencode-directory": directory }
-      const providerResponse = yield* request("/provider", { headers })
-      const configResponse = yield* request("/config/providers", { headers })
-
-      expect(providerResponse.status).toBe(200)
-      expect(configResponse.status).toBe(200)
-
-      const providerBody = yield* providerResponse.json
-      const configBody = yield* configResponse.json
-      expect(hasProviderWithFetch(providerBody, "all")).toBe(false)
-      expect(hasProviderWithFetch(configBody, "providers")).toBe(false)
-      expect(hasNonZeroModelCost(providerBody, "all", "google")).toBe(true)
-      expect(hasNonZeroModelCost(configBody, "providers", "google")).toBe(true)
-    }),
-    { ...projectOptions, init: writeFunctionOptionsPlugin },
-  )
-
-  it.instance(
-    "keeps provider.models hook input mutations out of provider state",
-    Effect.gen(function* () {
-      const directory = (yield* TestInstance).directory
-
-      const headers = { "x-opencode-directory": directory }
-      const providerResponse = yield* request("/provider", { headers })
-      const configResponse = yield* request("/config/providers", { headers })
-
-      expect(providerResponse.status).toBe(200)
-      expect(configResponse.status).toBe(200)
-
-      const providerBody = yield* providerResponse.json
-      const configBody = yield* configResponse.json
-      expect(hasProviderMutationMarker(providerBody, "all", "google")).toBe(false)
-      expect(hasProviderMutationMarker(configBody, "providers", "google")).toBe(false)
-      expect(hasNonZeroModelCost(providerBody, "all", "google")).toBe(true)
-    }),
-    { ...projectOptions, init: writeProviderModelsMutationPlugin },
   )
 })

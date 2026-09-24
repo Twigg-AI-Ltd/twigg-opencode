@@ -1,7 +1,6 @@
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
-import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
@@ -95,7 +94,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     agent: input.agent,
     permission: input.session.permission,
   })) {
-    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
+    const schema = ToolJsonSchema.forModel(input.model, ToolJsonSchema.fromTool(item))
     tools[item.id] = tool({
       description: item.description,
       inputSchema: jsonSchema(schema),
@@ -141,7 +140,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       description:
         "Lists resources provided by connected MCP servers. Resources provide context such as files, database schemas, or application-specific information.",
       inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
+        ToolJsonSchema.forModel(input.model, {
           type: "object",
           properties: {
             server: {
@@ -223,7 +222,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       description:
         "Lists resource templates provided by connected MCP servers. Resource templates are parameterized resources that can be read after filling in their URI template.",
       inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
+        ToolJsonSchema.forModel(input.model, {
           type: "object",
           properties: {
             server: {
@@ -306,7 +305,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       description:
         "Read a specific resource from an MCP server using the server name and resource URI. The URI is an MCP identifier and does not need to be a file URL.",
       inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
+        ToolJsonSchema.forModel(input.model, {
           type: "object",
           properties: {
             server: {
@@ -393,7 +392,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     if (!execute) continue
 
     const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
-    const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
+    const transformed = ToolJsonSchema.forModel(input.model, { ...schema, properties: schema.properties ?? {} })
     item.inputSchema = jsonSchema(transformed)
     item.execute = (args, opts) =>
       run.promise(

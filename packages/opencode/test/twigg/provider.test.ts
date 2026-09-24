@@ -3,14 +3,12 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Env } from "@/env"
-import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
 import { TwiggModels } from "@/twigg/models"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -34,8 +32,6 @@ const it = testEffect(
       Env.node,
       Config.node,
       Auth.node,
-      Plugin.node,
-      ModelsDev.node,
       RuntimeFlags.node,
       TwiggModels.node,
     ]),
@@ -141,14 +137,48 @@ it.instance(
 )
 
 it.instance(
-  "getLanguage refuses twigg models instead of resolving an SDK",
+  "config can supply the key and add or adjust models",
+  Effect.gen(function* () {
+    yield* withoutKey
+    const twigg = (yield* Provider.use.list())[TwiggModels.PROVIDER_ID]
+    expect(twigg.source).toBe("config")
+    expect(TwiggModels.settings(twigg)?.apiKey).toBe("tw_config_key")
+    expect(twigg.models["my-alias"]).toMatchObject({
+      api: { id: "gpt-6-luna", npm: TwiggModels.NPM },
+      name: "Luna alias",
+      limit: { context: 1_000_000, output: 128_000 },
+    })
+    expect(twigg.models["claude-sonnet-5"].limit.output).toBe(4096)
+  }),
+  {
+    config: {
+      twigg: { baseURL: "https://config.twigg.test/api/v1" },
+      provider: {
+        twigg: {
+          options: { apiKey: "tw_config_key" },
+          models: {
+            "my-alias": { id: "gpt-6-luna", name: "Luna alias" },
+            "claude-sonnet-5": { limit: { context: 1_000_000, output: 4096 } },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "whitelist and blacklist narrow the models",
   Effect.gen(function* () {
     yield* withKey("tw_env_key")
-    const model = yield* Provider.use.getModel(TwiggModels.PROVIDER_ID, ModelV2.ID.make("gpt-6-luna"))
-    const exit = yield* Provider.use.getLanguage(model).pipe(Effect.exit)
-    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
+    const twigg = (yield* Provider.use.list())[TwiggModels.PROVIDER_ID]
+    expect(Object.keys(twigg.models)).toEqual(["gpt-6-luna"])
   }),
-  { config: { twigg: { baseURL: "https://language.twigg.test/api/v1" } } },
+  {
+    config: {
+      twigg: { baseURL: "https://lists.twigg.test/api/v1" },
+      provider: { twigg: { whitelist: ["gpt-6-luna", "claude-sonnet-5"], blacklist: ["claude-sonnet-5"] } },
+    },
+  },
 )
 
 test("the list endpoint's default map prefers the Twigg default model", () => {
