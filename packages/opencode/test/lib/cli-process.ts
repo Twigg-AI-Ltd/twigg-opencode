@@ -27,13 +27,13 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import path from "node:path"
 import { TestLLMServer } from "./llm-server"
-import { testProviderConfig } from "./test-provider"
+import { TEST_MODEL, testProviderConfig } from "./test-provider"
 import { it } from "./effect"
 
 const opencodeRoot = path.resolve(import.meta.dir, "../../")
 const cliEntry = path.join(opencodeRoot, "src/index.ts")
 
-export const testModelID = "test/test-model"
+export const testModelID = TEST_MODEL
 
 // Wrap a Bun subprocess pipe (or any ReadableStream<Uint8Array>) as a Stream.
 // Centralizes the `evaluate` + `onError` boilerplate and tags errors with the

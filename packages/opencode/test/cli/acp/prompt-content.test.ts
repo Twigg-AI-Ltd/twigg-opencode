@@ -74,24 +74,7 @@ describe("opencode acp prompt content subprocess", () => {
   )
 })
 
+// The fake Twigg catalogue's model already takes attachments and reasoning.
 function promptContentConfig(llmUrl: string) {
-  const config = verifierConfig(llmUrl)
-  return {
-    ...config,
-    provider: {
-      test: {
-        ...config.provider.test,
-        models: Object.fromEntries(
-          Object.entries(config.provider.test.models).map(([id, model]) => [
-            id,
-            {
-              ...model,
-              attachment: true,
-              reasoning: true,
-            },
-          ]),
-        ),
-      },
-    },
-  }
+  return verifierConfig(llmUrl)
 }

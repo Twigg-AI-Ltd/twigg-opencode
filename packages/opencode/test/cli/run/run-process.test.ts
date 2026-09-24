@@ -85,7 +85,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   // finish, not a fatal provider/session error. Unknown finishes should continue
   // the prompt loop so a subsequent response can complete the run.
   cliIt.concurrent(
-    "unknown stream finish preserves partial output and continues",
+    "a failed run keeps its partial output and is retried",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         yield* llm.push(
@@ -214,7 +214,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.concurrent(
-    "--format json records an unknown stream finish and continuation",
+    "--format json records a failed run and its retry",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         yield* llm.push(
@@ -229,20 +229,19 @@ describe("opencode run (non-interactive subprocess)", () => {
 
         const events = opencode.parseJsonEvents(result.stdout)
         expect(result.exitCode).toBe(0)
+        // The failed Twigg run has no finish; its retry (retry_of) starts a new step.
         expect(events.map((event) => event.type)).toEqual([
           "step_start",
           "text",
           "tool_use",
           "step_finish",
           "step_start",
-          "step_finish",
           "step_start",
           "text",
           "step_finish",
         ])
         expect(events[1]?.part).toEqual(expect.objectContaining({ type: "text", text: "partial json" }))
-        expect(events[5]?.part).toEqual(expect.objectContaining({ type: "step-finish", reason: "unknown" }))
-        expect(events[7]?.part).toEqual(expect.objectContaining({ type: "text", text: "recovered" }))
+        expect(events[6]?.part).toEqual(expect.objectContaining({ type: "text", text: "recovered" }))
         expect(events.at(-1)?.part).toEqual(expect.objectContaining({ type: "step-finish", reason: "stop" }))
       }),
     60_000,

@@ -57,7 +57,7 @@ describe("opencode read-only commands (smoke)", () => {
       Effect.gen(function* () {
         const r = yield* opencode.spawn(["models"])
         opencode.expectExit(r, 0, "models")
-        expect(r.stdout).toContain("test/test-model")
+        expect(r.stdout).toContain("twigg/test-model")
       }),
     60_000,
   )

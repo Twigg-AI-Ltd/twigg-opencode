@@ -407,7 +407,7 @@ describe("session HttpApi", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             agent: "build",
-            model: { providerID: "test", modelID: "test-model" },
+            model: { providerID: "twigg", modelID: "test-model" },
             parts: [{ type: "text", text: "which directory?" }],
           }),
         },

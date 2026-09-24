@@ -409,6 +409,134 @@ function responses(item: Sse, model: string) {
   return { ...item, head: lines, tail: [] } satisfies Sse
 }
 
+// The Twigg catalogue entry the fake serves from GET /models (see testProviderConfig).
+export const TWIGG_TEST_MODEL = {
+  name: "test-model",
+  display_name: "Test Model",
+  model_family: "test",
+  context_window: 100_000,
+  max_output_tokens: 10_000,
+  supports_reasoning: true,
+  supports_tools: true,
+  max_reasoning_effort: null,
+  max_tool_definitions: null,
+  media: {
+    max_attachments_per_part: 20,
+    user: {
+      mime_types: ["image/png", "image/jpeg", "application/pdf"],
+      max_bytes_per_attachment: null,
+      max_attachments_per_request: null,
+    },
+    tool_result: {
+      mime_types: ["image/png", "image/jpeg"],
+      max_bytes_per_attachment: null,
+      max_attachments_per_request: null,
+    },
+  },
+  rates: { input: "0", output: "0", cache_read: "0", cache_write: null },
+  tiers: [],
+}
+
+function frame(event: string, data: unknown) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+const TWIGG_STOP: Record<string, string> = {
+  stop: "end_turn",
+  tool_calls: "tool_use",
+  content_filter: "refusal",
+  length: "max_tokens",
+}
+
+function finishOf(item: Sse) {
+  return [...item.head, ...item.tail].flatMap((part) => {
+    const choice = choices(part)
+    return choice && "finish_reason" in choice && typeof choice.finish_reason === "string" ? [choice.finish_reason] : []
+  })[0]
+}
+
+// The same scripted reply as Twigg SSE: `run`, blocks, then `done` (or `error`, or nothing for a hang).
+function twiggFrames(item: Sse, run: { runID: string; chatID: string }) {
+  const out: string[] = []
+  const calls: { tool_use_id: string; tool_name: string }[] = []
+  const state = { block: undefined as string | undefined, usage: undefined as Usage | undefined }
+  const open = (kind: string, extra: Record<string, unknown> = {}) => {
+    if (state.block !== undefined) out.push(frame("block_stop", {}))
+    state.block = kind
+    out.push(frame("block_start", { kind, ...extra }))
+  }
+  for (const part of flow(item)) {
+    if (part.type === "text") {
+      if (state.block !== "text") open("text")
+      out.push(frame("delta", { kind: "text", text: part.text }))
+    }
+    if (part.type === "reason") {
+      if (state.block !== "reasoning") open("reasoning")
+      out.push(frame("delta", { kind: "reasoning", text: part.text }))
+    }
+    if (part.type === "tool-start") {
+      calls.push({ tool_use_id: part.id, tool_name: part.name })
+      open("tool_call", { tool_name: part.name, tool_use_id: part.id })
+    }
+    if (part.type === "tool-args") out.push(frame("delta", { kind: "tool_input", text: part.text }))
+    if (part.type === "usage") state.usage = part.usage
+  }
+  const head = [frame("run", { run_id: run.runID, chat_id: run.chatID, closed_tool_calls: [] })]
+  if (item.hang) return { head, tail: out }
+  if (item.error !== undefined)
+    return {
+      head,
+      tail: [...out, frame("error", { code: "external_service_error", message: String(item.error) })],
+    }
+  if (state.block !== undefined) out.push(frame("block_stop", {}))
+  const finish = finishOf(item)
+  out.push(
+    frame("done", {
+      stop_reason: calls.length > 0 ? "tool_use" : (TWIGG_STOP[finish ?? "stop"] ?? "end_turn"),
+      pending_tool_calls: calls,
+      usage: {
+        input_tokens: state.usage?.input ?? 0,
+        output_tokens: state.usage?.output ?? 0,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
+      cost: null,
+      cost_currency: "USD",
+      model_served: "test-model",
+      provider_response_id: null,
+      compaction: null,
+      server_tools: null,
+    }),
+  )
+  return { head, tail: out }
+}
+
+function sendTwigg(item: Sse, run: { runID: string; chatID: string }) {
+  const frames = twiggFrames(item, run)
+  const head = Stream.fromIterable(frames.head).pipe(Stream.encodeText)
+  const tail = Stream.fromIterable(frames.tail).pipe(Stream.encodeText)
+  const wait = item.wait
+  const body: Stream.Stream<Uint8Array, unknown> = wait
+    ? Stream.concat(head, Stream.fromEffect(Effect.promise(() => wait)).pipe(Stream.flatMap(() => tail)))
+    : Stream.concat(head, tail)
+  return HttpServerResponse.stream(item.hang ? Stream.concat(body, Stream.never) : body, {
+    contentType: "text/event-stream",
+  })
+}
+
+const resetTwigg = Effect.fn("TestLLMServer.resetTwigg")(function* (item: Sse, run: { runID: string; chatID: string }) {
+  const req = yield* HttpServerRequest.HttpServerRequest
+  const res = NodeHttpServerRequest.toServerResponse(req)
+  const frames = twiggFrames({ ...item, hang: true }, run)
+  yield* Effect.sync(() => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    for (const part of [...frames.head, ...frames.tail]) res.write(part)
+    res.destroy(new Error("connection reset"))
+  })
+  return yield* Effect.never
+})
+
 function modelFrom(body: unknown) {
   if (!body || typeof body !== "object") return "test-model"
   if (!("model" in body) || typeof body.model !== "string") return "test-model"
@@ -669,10 +797,25 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         return first.item
       }
 
-      const handle = Effect.fn("TestLLMServer.handle")(function* (mode: "chat" | "responses") {
+      const runs = { count: 0 }
+      const handle = Effect.fn("TestLLMServer.handle")(function* (mode: "chat" | "responses" | "twigg") {
         const req = yield* HttpServerRequest.HttpServerRequest
         const body = yield* req.json.pipe(Effect.orElseSucceed(() => ({})))
         const current = hit(req.originalUrl, body)
+        if (mode === "twigg") {
+          runs.count += 1
+          const run = { runID: `run_${runs.count}`, chatID: req.url.split("/")[3] ?? "chat" }
+          const next = pull(current) ?? { type: "sse", head: [], tail: [textLine("ok"), finishLine("stop")] }
+          hits = [...hits, current]
+          yield* notify()
+          if (next.type !== "sse")
+            return HttpServerResponse.text(JSON.stringify(next.body), {
+              status: next.status,
+              contentType: "application/json",
+            })
+          if (next.reset) return yield* resetTwigg(next, run)
+          return sendTwigg(next, run)
+        }
         if (isTitleRequest(body)) {
           hits = [...hits, current]
           yield* notify()
@@ -701,6 +844,51 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
 
       yield* router.add("POST", "/v1/chat/completions", handle("chat"))
       yield* router.add("POST", "/v1/responses", handle("responses"))
+
+      // Twigg: the chat endpoint streams the scripted replies; the rest only needs to answer plausibly.
+      const chats = { count: 0 }
+      const json = (body: unknown, status = 200) =>
+        HttpServerResponse.text(JSON.stringify(body), { status, contentType: "application/json" })
+      yield* router.add("POST", "/v1/chats/:chat/responses", handle("twigg"))
+      yield* router.add(
+        "GET",
+        "/v1/models",
+        Effect.succeed(
+          json([TWIGG_TEST_MODEL, { ...TWIGG_TEST_MODEL, name: "second-model", display_name: "Second Test Model" }]),
+        ),
+      )
+      yield* router.add(
+        "POST",
+        "/v1/chats",
+        Effect.gen(function* () {
+          const body = yield* (yield* HttpServerRequest.HttpServerRequest).json.pipe(Effect.orElseSucceed(() => ({})))
+          chats.count += 1
+          const namespace = body && typeof body === "object" && "namespace" in body ? body.namespace : null
+          return json({ id: `chat_${chats.count}`, namespace, title: null, description: null, user_metadata: {} }, 201)
+        }),
+      )
+      yield* router.add(
+        "GET",
+        "/v1/chats",
+        Effect.succeed(json({ data: [], first_id: null, last_id: null, has_more: false })),
+      )
+      yield* router.add("DELETE", "/v1/chats/:chat", Effect.succeed(HttpServerResponse.empty({ status: 204 })))
+      yield* router.add(
+        "GET",
+        "/v1/chats/:chat/history",
+        Effect.succeed(json({ data: [], first_ordinal: null, last_ordinal: null, has_more: false })),
+      )
+      yield* router.add(
+        "GET",
+        "/v1/runs/:run",
+        Effect.gen(function* () {
+          const id = (yield* HttpServerRequest.HttpServerRequest).url.split("/")[3]
+          return json({ id, status: "succeeded", error: null, cost: null, usage: null })
+        }),
+      )
+      yield* router.add("GET", "/v1/config/instructions", Effect.succeed(json([])))
+      yield* router.add("POST", "/v1/config/instructions", Effect.succeed(json({})))
+      yield* router.add("DELETE", "/v1/config/instructions/active", Effect.succeed(json({})))
 
       yield* server.serve(router.asHttpEffect())
 

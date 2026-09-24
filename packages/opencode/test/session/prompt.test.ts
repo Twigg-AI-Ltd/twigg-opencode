@@ -68,7 +68,7 @@ const summary = Layer.succeed(
 )
 
 const ref = {
-  providerID: ProviderV2.ID.make("test"),
+  providerID: ProviderV2.ID.make("twigg"),
   modelID: ModelV2.ID.make("test-model"),
 }
 
@@ -256,15 +256,13 @@ const withMcpInstructions = testEffect(
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
-// Config that registers a custom "test" provider with a "test-model" model
-// so provider model lookup succeeds inside the loop.
+// Config that connects the twigg provider with a "test-model" model, so model lookup succeeds inside the loop even
+// without a server. With a TestLLMServer, the model also comes from the fake's catalogue.
 const cfg = {
+  twigg: { baseURL: "http://localhost:1/v1" },
   provider: {
-    test: {
-      name: "Test",
-      id: "test",
-      env: [],
-      npm: "@ai-sdk/openai-compatible",
+    twigg: {
+      options: { apiKey: "test-key" },
       models: {
         "test-model": {
           id: "test-model",
@@ -279,28 +277,12 @@ const cfg = {
           options: {},
         },
       },
-      options: {
-        apiKey: "test-key",
-        baseURL: "http://localhost:1/v1",
-      },
     },
   },
 }
 
 function providerCfg(url: string) {
-  return {
-    ...cfg,
-    provider: {
-      ...cfg.provider,
-      test: {
-        ...cfg.provider.test,
-        options: {
-          ...cfg.provider.test.options,
-          baseURL: url,
-        },
-      },
-    },
-  }
+  return { ...cfg, twigg: { baseURL: url } }
 }
 
 const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
@@ -674,17 +656,14 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
   }),
 )
 
-it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
+it.instance("a request Twigg rejects as too large stops the loop without compacting", () =>
   Effect.gen(function* () {
-    const { llm } = yield* useServerConfig((url) => ({
-      ...providerCfg(url),
-      compaction: { auto: false },
-    }))
+    const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
 
-    yield* llm.error(413, { error: { message: "request entity too large" } })
+    yield* llm.error(413, { error: { code: "payload_too_large", message: "request entity too large" } })
     yield* prompt.prompt({
       sessionID: chat.id,
       agent: "build",
@@ -697,9 +676,10 @@ it.instance("loop stops provider overflow instead of auto-compacting when disabl
 
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") {
-      expect(result.info.error?.name).toBe("ContextOverflowError")
-      expect(result.info.finish).toBe("error")
+      expect(result.info.error?.name).toBe("APIError")
+      expect(result.info.error?.data).toMatchObject({ message: "request entity too large", isRetryable: false })
     }
+    expect(yield* llm.calls).toBe(1)
     expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
   }),
 )
@@ -850,34 +830,6 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
-it.instance("loop continues when finish is unknown", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const session = yield* sessions.create({
-      title: "Pinned",
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    })
-    yield* prompt.prompt({
-      sessionID: session.id,
-      agent: "build",
-      noReply: true,
-      parts: [{ type: "text", text: "hello" }],
-    })
-    yield* llm.push(reply())
-    yield* llm.text("second")
-
-    const result = yield* prompt.loop({ sessionID: session.id })
-    expect(yield* llm.calls).toBe(2)
-    expect(result.info.role).toBe("assistant")
-    if (result.info.role === "assistant") {
-      expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
-      expect(result.info.finish).toBe("stop")
-    }
-  }),
-)
-
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -951,7 +903,7 @@ it.instance("failed subtask preserves metadata on error tool state", () =>
       ...providerCfg(url),
       agent: {
         general: {
-          model: "test/missing-model",
+          model: "twigg/missing-model",
         },
       },
     }))
@@ -983,7 +935,7 @@ it.instance("failed subtask preserves metadata on error tool state", () =>
     expect(tool.state.metadata).toBeDefined()
     expect(tool.state.metadata?.sessionId).toBeDefined()
     expect(tool.state.metadata?.model).toEqual({
-      providerID: ProviderV2.ID.make("test"),
+      providerID: ProviderV2.ID.make("twigg"),
       modelID: ModelV2.ID.make("missing-model"),
     })
   }),
@@ -1488,11 +1440,10 @@ it.instance("prompt submitted during an active run is included in the next LLM i
     expect(last.info.parentID).toBe(id)
     expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
 
+    // Twigg keeps the conversation, so the second request carries only the new prompt.
     const inputs = yield* llm.inputs
     expect(inputs).toHaveLength(2)
-    const messages = inputs.at(-1)?.messages
-    if (!Array.isArray(messages)) throw new Error("expected LLM messages")
-    expect(messages.at(-1)).toEqual({ role: "user", content: "second" })
+    expect(inputs.at(-1)?.input).toEqual([{ type: "prompt", text: "second" }])
   }),
 )
 
@@ -1838,7 +1789,7 @@ unix(
 
         expect(result.info.role).toBe("assistant")
         const inputs = yield* llm.inputs
-        expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("configured")
+        expect(JSON.stringify(inputs.at(-1)?.input)).toContain("configured")
       }),
     ),
   30_000,
@@ -2338,7 +2289,7 @@ noLLMServer.instance(
       })
       if (match.info.role !== "user") throw new Error("expected user message")
       expect(match.info.model).toEqual({
-        providerID: ProviderV2.ID.make("test"),
+        providerID: ProviderV2.ID.make("twigg"),
         modelID: ModelV2.ID.make("test-model"),
         variant: "xhigh",
       })
@@ -2361,11 +2312,11 @@ noLLMServer.instance(
       ...cfg,
       provider: {
         ...cfg.provider,
-        test: {
-          ...cfg.provider.test,
+        twigg: {
+          ...cfg.provider.twigg,
           models: {
             "test-model": {
-              ...cfg.provider.test.models["test-model"],
+              ...cfg.provider.twigg.models["test-model"],
               variants: { xhigh: {}, high: {} },
             },
           },
@@ -2373,7 +2324,7 @@ noLLMServer.instance(
       },
       agent: {
         build: {
-          model: "test/test-model",
+          model: "twigg/test-model",
           variant: "xhigh",
         },
       },

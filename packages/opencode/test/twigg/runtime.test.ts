@@ -367,15 +367,11 @@ describe("twigg runtime", () => {
     }),
   )
 
-  it.effect("never retries once the run has started", () =>
+  it.effect("does not retry a run that failed for good", () =>
     Effect.gen(function* () {
       const server = twigg({
         "POST /chats/chat_1/responses": [
-          sse([
-            run(),
-            ...text("partial"),
-            ["error", { code: "external_service_error", message: "provider overloaded" }],
-          ]),
+          sse([run(), ...text("partial"), ["error", { code: "validation_error", message: "tool schema rejected" }]]),
         ],
       })
       const { store, chat } = memoryChat({ chat_id: "chat_1", namespace: "ns" })
@@ -383,9 +379,39 @@ describe("twigg runtime", () => {
         streamInput({ chat, history: [user("msg_1", [{ type: "text", text: "hi" }])] }),
         server.layer,
       )
-      expect(error.data).toMatchObject({ isRetryable: false, message: "provider overloaded" })
-      // The run failed on the server, so it is over: the cursor moved and there is no orphan.
-      expect(store.state).toEqual({ chat_id: "chat_1", namespace: "ns", cursor_message_id: "msg_1" })
+      expect(error.data).toMatchObject({ isRetryable: false, message: "tool schema rejected" })
+      // The run is over: the cursor moved, and there is no orphan.
+      expect(store.state).toEqual({
+        chat_id: "chat_1",
+        namespace: "ns",
+        cursor_message_id: "msg_1",
+        failed_run: "run_1",
+      })
+    }),
+  )
+
+  it.effect("retries a run that failed for a passing reason with retry_of, never re-posting the input", () =>
+    Effect.gen(function* () {
+      const server = twigg({
+        "POST /chats/chat_1/responses": [
+          sse([run("run_1"), ...text("partial"), ["error", { code: "external_service_error", message: "overloaded" }]]),
+          sse([run("run_2"), ...text("recovered"), done()]),
+        ],
+      })
+      const { store, chat } = memoryChat({ chat_id: "chat_1", namespace: "ns" })
+      const input = streamInput({ chat, history: [user("msg_1", [{ type: "text", text: "hi" }])] })
+      const error = yield* failure(input, server.layer)
+      expect(error.data).toMatchObject({ isRetryable: true, message: "overloaded" })
+
+      // The processor's retry runs the same request again.
+      const events = yield* collect(input, server.layer)
+      expect(events.filter((event) => event.type === "text-delta").map((event) => event.text)).toEqual(["recovered"])
+      expect(server.requests[1].body).toMatchObject({
+        input: [],
+        retry_of: "run_1",
+        idempotency_key: "msg_a1-retry-run_1",
+      })
+      expect(store.state?.failed_run).toBeUndefined()
     }),
   )
 
@@ -609,6 +635,7 @@ describe("twigg delta", () => {
         { type: "file", ...png },
         { type: "file", mime: "text/plain", url: "file:///a.txt", filename: "a.txt" },
         { type: "file", mime: "image/png", url: "https://example.com/x.png", filename: "x.png" },
+        { type: "file", mime: "text/markdown", url: "data:text/markdown;base64,IyBIaQ==", filename: "notes.md" },
       ]),
       assistant("msg_2", [completed("call_1", "screenshot taken", { attachments: [{ type: "file", ...png }] })]),
     ]
@@ -622,7 +649,7 @@ describe("twigg delta", () => {
       },
       {
         type: "prompt",
-        text: "see\n\n[Attached image/png: x.png]",
+        text: 'see\n\n<file name="notes.md" type="text/markdown">\n# Hi\n</file>\n\n[Attached image/png: x.png]',
         media: [{ mime: "image/png", data_base64: "iVBORw0K", filename: "shot.png" }],
       },
     ])

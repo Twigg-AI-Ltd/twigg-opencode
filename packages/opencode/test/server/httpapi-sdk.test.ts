@@ -786,7 +786,7 @@ describe("HttpApi SDK", () => {
           sdk.session.prompt({
             sessionID,
             agent: "build",
-            model: { providerID: "test", modelID: "test-model" },
+            model: { providerID: "twigg", modelID: "test-model" },
             parts: [{ type: "text", text: "hello llm" }],
           }),
         )
@@ -821,7 +821,7 @@ describe("HttpApi SDK", () => {
           sdk.session.prompt({
             sessionID,
             agent: "build",
-            model: { providerID: "test", modelID: "test-model" },
+            model: { providerID: "twigg", modelID: "test-model" },
             parts: [{ type: "text", text: "hello skill context" }],
           }),
         )

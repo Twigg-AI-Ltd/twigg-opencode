@@ -25,7 +25,7 @@ describe("opencode acp config option subprocess", () => {
         const model = expectSelectOption((yield* newSession(acp, home)).configOptions, "model")
 
         expect(model.category).toBe("model")
-        expect(model.currentValue).toBe("test/test-model")
+        expect(model.currentValue).toBe("twigg/test-model")
         expect(flattenSelectOptions(model).length).toBeGreaterThanOrEqual(2)
       }),
     60_000,
@@ -42,8 +42,8 @@ describe("opencode acp config option subprocess", () => {
         yield* initialize(acp)
         const session = yield* newSession(acp, home)
         const model = expectSelectOption(session.configOptions, "model")
-        const nextModel = flattenSelectOptions(model).find((option) => option.value === "test/second-model")?.value
-        expect(nextModel).toBe("test/second-model")
+        const nextModel = flattenSelectOptions(model).find((option) => option.value === "twigg/second-model")?.value
+        expect(nextModel).toBe("twigg/second-model")
 
         const updated = expectOk(
           yield* acp.request<SetSessionConfigOptionResponse>("session/set_config_option", {
@@ -70,8 +70,17 @@ describe("opencode acp config option subprocess", () => {
         const effort = expectSelectOption((yield* newSession(acp, home)).configOptions, "effort")
 
         expect(effort.category).toBe("thought_level")
-        expect(effort.currentValue).toBe("low")
-        expect(flattenSelectOptions(effort).map((option) => option.value)).toEqual(["low", "high", "default"])
+        // Twigg's reasoning efforts, lowest first.
+        expect(effort.currentValue).toBe("off")
+        expect(flattenSelectOptions(effort).map((option) => option.value)).toEqual([
+          "off",
+          "low",
+          "medium",
+          "high",
+          "x_high",
+          "max",
+          "default",
+        ])
       }),
     60_000,
   )

@@ -2,7 +2,7 @@ import { expect } from "bun:test"
 import type { InitializeResponse, NewSessionResponse, SessionConfigOption } from "@agentclientprotocol/sdk"
 import { Effect } from "effect"
 import type { CliFixture } from "../../lib/cli-process"
-import { testProviderConfig } from "../../lib/test-provider"
+import { TEST_MODEL, testProviderConfig } from "../../lib/test-provider"
 import {
   createAcpClient as createJsonRpcAcpClient,
   expectOk,
@@ -36,34 +36,10 @@ export function newSession(acp: AcpClient, cwd: string) {
 }
 
 export function verifierConfig(llmUrl: string, skills?: string) {
-  const config = testProviderConfig(llmUrl)
   return {
-    ...config,
-    model: "test/test-model",
+    ...testProviderConfig(llmUrl),
+    model: TEST_MODEL,
     ...(skills ? { skills: { paths: [skills] } } : {}),
-    provider: {
-      test: {
-        ...config.provider.test,
-        models: {
-          "test-model": {
-            ...config.provider.test.models["test-model"],
-            variants: {
-              low: {},
-              high: {},
-            },
-          },
-          "second-model": {
-            ...config.provider.test.models["test-model"],
-            id: "second-model",
-            name: "Second Test Model",
-            variants: {
-              medium: {},
-              max: {},
-            },
-          },
-        },
-      },
-    },
   }
 }
 

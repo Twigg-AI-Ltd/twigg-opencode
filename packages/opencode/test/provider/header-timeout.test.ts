@@ -8,7 +8,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
-import { testProviderConfig } from "../lib/test-provider"
+import { legacyTestProviderConfig } from "../lib/test-provider"
 import { Env } from "@/env"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
@@ -245,7 +245,7 @@ it.live("OpenAI API auth gets default headerTimeout", () =>
 )
 
 function providerConfig(url: string, options: Record<string, unknown> = {}) {
-  const config = testProviderConfig(url)
+  const config = legacyTestProviderConfig(url)
   return {
     ...config,
     provider: {
