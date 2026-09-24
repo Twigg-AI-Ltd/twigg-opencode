@@ -1421,7 +1421,11 @@ const layer = Layer.effect(
         ) {
           const baseURL = cfg.twigg?.baseURL ?? TwiggClient.DEFAULT_BASE_URL
           const stored = yield* auth.get(TwiggModels.PROVIDER_ID).pipe(Effect.orDie)
-          const apiKey = (yield* env.get(TwiggModels.ENV_KEY)) ?? (stored?.type === "api" ? stored.key : undefined)
+          const configured = cfg.provider?.[TwiggModels.PROVIDER_ID]?.options?.apiKey
+          const apiKey =
+            (typeof configured === "string" ? configured : undefined) ??
+            (yield* env.get(TwiggModels.ENV_KEY)) ??
+            (stored?.type === "api" ? stored.key : undefined)
           const models = apiKey ? yield* twiggModels.get({ baseURL, apiKey }) : []
           database[TwiggModels.PROVIDER_ID] = TwiggModels.toProvider(models, baseURL)
         }
@@ -1518,6 +1522,8 @@ const layer = Layer.effect(
               model.provider?.npm ??
               provider.npm ??
               existingModel?.api.npm ??
+              // A config-defined Twigg model (not in the account's catalogue) still runs through the Twigg runtime.
+              (providerID === TwiggModels.PROVIDER_ID ? TwiggModels.NPM : undefined) ??
               // Config-defined gateway models bypass fromModelsDevModel, so resolve the
               // native passthrough npm here before falling back to the catalog default.
               cloudflareGatewayNpm(providerID, apiID) ??

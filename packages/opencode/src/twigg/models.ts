@@ -114,6 +114,17 @@ export function preferredModel(models: Record<string, unknown>) {
   return DEFAULT_MODELS.find((id) => id in models)
 }
 
+// How to reach Twigg for a connected provider: the key comes from env or auth.json (`key`) or from config
+// (`options.apiKey`).
+export function settings(info: Provider.Info | undefined): TwiggClient.Settings | undefined {
+  const apiKey = typeof info?.options.apiKey === "string" ? info.options.apiKey : info?.key
+  if (!info || !apiKey) return undefined
+  return {
+    baseURL: typeof info.options.baseURL === "string" ? info.options.baseURL : TwiggClient.DEFAULT_BASE_URL,
+    apiKey,
+  }
+}
+
 export function toProvider(models: readonly Model[], baseURL: string): Provider.Info {
   return {
     id: PROVIDER_ID,

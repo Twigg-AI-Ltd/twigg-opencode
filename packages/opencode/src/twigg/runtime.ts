@@ -26,6 +26,9 @@ export const State = Schema.Struct({
   // A run whose stream closed before `done` (abort or a dropped connection). It keeps running on the server, so the
   // next turn waits for it and copies what it produced into the local message.
   orphan: Schema.optional(Schema.Struct({ run_id: Schema.String, message_id: Schema.String })),
+  // The latest run that failed on the server (an `error` event). Its input is in the ledger already, so a retry with
+  // nothing new to send asks Twigg to run it again (`retry_of`) instead of posting the input twice.
+  failed_run: Schema.optional(Schema.String),
   // Hash of the last context block the chat received, so it is only sent again when it changes.
   context_hash: Schema.optional(Schema.String),
   // Set on a session created from a chat found on Twigg; its history is imported when it is first opened.
@@ -99,7 +102,8 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
       const settled = loaded?.orphan ? yield* settle(input, loaded, loaded.orphan) : loaded
       const media = Option.getOrUndefined(decodeMedia(input.model.options.twigg?.media))
       const next = delta(input.history, settled?.cursor_message_id, media)
-      const problem = checkRequest(input, next.input, media)
+      const retry = next.input.length === 0 ? settled?.failed_run : undefined
+      const problem = retry ? undefined : checkRequest(input, next.input, media)
       if (problem) return yield* Effect.fail(apiError(problem, false))
       const state = settled ?? (yield* create(input, next.input))
       yield* TwiggInstructions.ensure(
@@ -120,7 +124,9 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
         body: {
           model: input.model.api.id,
           input: context.parts,
-          idempotency_key: input.assistantID,
+          // A retry needs its own key; the failed run holds the original one.
+          idempotency_key: retry ? `${input.assistantID}-retry-${retry}` : input.assistantID,
+          retry_of: retry,
           max_tokens: input.maxTokens,
           reasoning_effort: input.reasoningEffort,
           tools: definitions(input.tools),
@@ -133,9 +139,11 @@ export function stream(input: Input): Stream.Stream<LLMEvent, unknown, HttpClien
           save({
             cursor_message_id: next.last,
             orphan: { run_id: runID, message_id: input.assistantID },
+            failed_run: undefined,
             ...(context.hash ? { context_hash: context.hash } : {}),
           }),
         done: save({ orphan: undefined }),
+        failed: (runID) => save({ orphan: undefined, failed_run: runID }),
         execute: (calls) => execute(input, calls),
       }).pipe(
         // The input already landed under this idempotency key, e.g. a retry after the connection broke before `run`.
@@ -179,7 +187,7 @@ export function respond(input: {
       max_tokens: input.maxTokens,
       instructions: input.system.join("\n"),
     }),
-    { run: () => Effect.void, done: Effect.void, execute: () => Effect.succeed([]) },
+    { run: () => Effect.void, done: Effect.void, failed: () => Effect.void, execute: () => Effect.succeed([]) },
   ).pipe(Stream.mapError((error) => (isTwiggError(error) ? toAPIError(error) : error)))
 }
 
@@ -192,19 +200,27 @@ export function delta(
 ) {
   // Without a cursor the chat is new, but the session may not be: a fork, or a session that used another provider
   // before. A new chat has no open tool calls, and replaying the old transcript as prompts would garble it, so it
-  // starts from the prompts after the last assistant reply.
+  // starts from the prompts after the last reply the model wrote.
   const start =
     cursor === undefined
-      ? history.findLastIndex((message) => message.info.role === "assistant" && message.parts.length > 0) + 1
+      ? history.findLastIndex(
+          (message) => message.info.role === "assistant" && message.parts.some((part) => !isUserExecuted(part)),
+        ) + 1
       : 0
   const fresh = history.slice(start).filter((message) => cursor === undefined || message.info.id > cursor)
+  const tools = fresh
+    .filter((message) => message.info.role === "assistant")
+    .flatMap((message) => message.parts.filter((part): part is SessionV1.ToolPart => part.type === "tool"))
+    .filter((part) => !part.metadata?.providerExecuted)
   const input: Part[] = [
-    ...fresh
-      .filter((message) => message.info.role === "assistant")
-      .flatMap((message) => message.parts.filter((part): part is SessionV1.ToolPart => part.type === "tool"))
-      .filter((part) => !part.metadata?.providerExecuted)
-      .map((part) => toolResult(part, media?.tool_result)),
-    ...fresh.filter((message) => message.info.role === "user").flatMap((message) => prompt(message.parts)),
+    ...tools.filter((part) => !isUserExecuted(part)).map((part) => toolResult(part, media?.tool_result)),
+    // Prompts in order. A tool the user ran (a subtask or shell command) was never called by the model, so Twigg
+    // gets it as text after the prompt that started it.
+    ...fresh.flatMap((message): Part[] =>
+      message.info.role === "user"
+        ? prompt(message.parts)
+        : message.parts.filter(isUserExecuted).map((part) => ({ type: "prompt" as const, text: userToolText(part) })),
+    ),
   ]
   return { input, last: history.at(-1)?.info.id }
 }
@@ -266,6 +282,8 @@ type Call = { readonly id: string; readonly name: string; readonly input: unknow
 type Hooks = {
   readonly run: (runID: string) => Effect.Effect<void>
   readonly done: Effect.Effect<void>
+  // The run failed on the server (an `error` event), so it is over and no longer an orphan.
+  readonly failed: (runID: string) => Effect.Effect<void>
   readonly execute: (calls: readonly Call[]) => Effect.Effect<LLMEvent[]>
 }
 
@@ -371,9 +389,8 @@ function translate<R>(
             ),
       ),
     ),
-    // The run failed on the server, so it is over and no longer an orphan.
     Stream.catchTag("TwiggStreamError", (error) =>
-      Stream.fromEffect(hooks.done.pipe(Effect.andThen(Effect.fail(error)))),
+      Stream.fromEffect(hooks.failed(ctx.runID).pipe(Effect.andThen(Effect.fail(error)))),
     ),
     // After `run`, the server owns the turn: a retry would post the same input again, so nothing past here retries.
     // Earlier errors stay raw so the caller can still handle a 409 before the stream starts.
@@ -551,6 +568,20 @@ function definitions(tools: Record<string, Tool>) {
   return items.length > 0 ? items : undefined
 }
 
+function isUserExecuted(part: SessionV1.Part): part is SessionV1.ToolPart {
+  return part.type === "tool" && part.metadata?.userExecuted === true
+}
+
+function userToolText(part: SessionV1.ToolPart) {
+  const result =
+    part.state.status === "completed"
+      ? part.state.output
+      : part.state.status === "error"
+        ? `Error: ${part.state.error}`
+        : "(still running)"
+  return `The user ran the ${part.tool} tool with ${JSON.stringify(part.state.input)}. Result:\n${result}`
+}
+
 // Adds the context block to the first prompt when it changed since the chat last saw it. A request with only tool
 // results carries no prompt, so the block waits for the next one.
 function withContext(parts: readonly Part[], context: string, sent: string | undefined) {
@@ -571,19 +602,33 @@ function prompt(parts: readonly SessionV1.Part[]): Part[] {
     .filter((part): part is SessionV1.FilePart => part.type === "file")
     // text/plain files and directories are already inlined as text parts when the message is created.
     .filter((part) => part.mime !== "text/plain" && part.mime !== "application/x-directory")
-  const media = files.flatMap((file) => Option.toArray(toMedia(file)))
+  // Twigg media is for images, PDFs and the like. Other text files go in as text.
+  const inline = files.filter((file) => isText(file.mime))
+  const binary = files.filter((file) => !isText(file.mime))
+  const media = binary.flatMap((file) => Option.toArray(toMedia(file)))
   const text = [
     ...parts.flatMap((part) => {
       if (part.type === "text" && !part.ignored && part.text !== "") return [part.text]
       if (part.type === "subtask") return ["The following tool was executed by the user"]
       return []
     }),
-    ...files
+    ...inline.map((file) =>
+      Option.match(toMedia(file), {
+        onNone: () => `[Attached ${file.mime}: ${file.filename ?? file.url}]`,
+        onSome: (item) =>
+          `<file name="${file.filename ?? "attachment"}" type="${file.mime}">\n${Buffer.from(item.data_base64, "base64").toString("utf8")}\n</file>`,
+      }),
+    ),
+    ...binary
       .filter((file) => Option.isNone(toMedia(file)))
       .map((file) => `[Attached ${file.mime}: ${file.filename ?? file.url}]`),
   ].join("\n\n")
   if (!text && media.length === 0) return []
   return [{ type: "prompt", ...(text ? { text } : {}), ...(media.length > 0 ? { media } : {}) }]
+}
+
+function isText(mime: string) {
+  return mime.startsWith("text/") || /^application\/(json|xml|x-yaml|yaml|javascript|typescript)(;|$)/.test(mime)
 }
 
 function toolResult(part: SessionV1.ToolPart, slot: MediaSlot | undefined): Part {
@@ -723,16 +768,20 @@ function isTwiggError(error: unknown): error is TwiggClient.Error | TwiggPending
   )
 }
 
+// Twigg error codes worth another try (context/twigg/api-guide.md, "Errors").
+const TRANSIENT = new Set(["external_service_error", "internal_error", "unavailable", "rate_limited"])
+
 function toAPIError(error: TwiggClient.Error | TwiggPending.TwiggApiPending, started = false) {
   if (error._tag === "TwiggApiPending") return apiError(`${error.endpoint} isn't available on Twigg yet`, false)
   const status = "status" in error ? error.status : undefined
-  // Only failures before the run started are safe to retry: the request is re-posted with the same idempotency key.
-  const retry =
-    !started &&
-    (error._tag === "TwiggRateLimitedError" ||
+  // Before the run started, the request is re-posted with the same idempotency key. After it, only a run that failed
+  // on the server for a passing reason is retried, through retry_of (see `failed_run`).
+  const retry = started
+    ? error._tag === "TwiggStreamError" && TRANSIENT.has(error.code)
+    : error._tag === "TwiggRateLimitedError" ||
       error._tag === "TwiggTransportError" ||
       (error._tag === "TwiggServerError" && (status === 502 || status === 503)) ||
-      (error._tag === "TwiggConflictError" && error.reason === "busy"))
+      (error._tag === "TwiggConflictError" && error.reason === "busy")
   return apiError(message(error, started), retry, status)
 }
 

@@ -49,14 +49,7 @@ const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
     const recent = new Map<string, number>()
 
-    const settings = Effect.gen(function* () {
-      const twigg = (yield* provider.list())[TwiggModels.PROVIDER_ID]
-      if (!twigg?.key) return undefined
-      return {
-        baseURL: typeof twigg.options.baseURL === "string" ? twigg.options.baseURL : TwiggClient.DEFAULT_BASE_URL,
-        apiKey: twigg.key,
-      }
-    })
+    const settings = provider.list().pipe(Effect.map((all) => TwiggModels.settings(all[TwiggModels.PROVIDER_ID])))
     const install = TwiggNamespace.installID().pipe(Effect.provideService(FSUtil.Service, fs))
     const due = (key: string, every: number) => {
       if (Date.now() - (recent.get(key) ?? 0) < every) return false

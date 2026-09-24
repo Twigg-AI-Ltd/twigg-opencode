@@ -34,7 +34,6 @@ import { Instruction } from "./instruction"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { HttpClient } from "effect/unstable/http"
-import { TwiggClient } from "@/twigg/client"
 import { TwiggModels } from "@/twigg/models"
 import { TwiggRuntime } from "@/twigg/runtime"
 import os from "os"
@@ -118,11 +117,8 @@ const live: Layer.Layer<
         flags,
         isWorkflow: false,
       })
-      if (!item.key) return yield* Effect.die(new Error(`Set ${TwiggModels.ENV_KEY} or log in to Twigg first`))
-      const settings = {
-        baseURL: typeof item.options.baseURL === "string" ? item.options.baseURL : TwiggClient.DEFAULT_BASE_URL,
-        apiKey: item.key,
-      }
+      const settings = TwiggModels.settings(item)
+      if (!settings) return yield* Effect.die(new Error(`Set ${TwiggModels.ENV_KEY} or log in to Twigg first`))
       const variant = input.user.model.variant ? input.model.variants?.[input.user.model.variant] : undefined
       // AGENTS.md and agent prompts are published to the chat's namespaces. The rest of the system text changes per
       // machine or per turn, so it goes to the chat as a context block instead.

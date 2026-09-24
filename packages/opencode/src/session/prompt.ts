@@ -306,6 +306,8 @@ const layer = Layer.effect(
         type: "tool",
         callID: ulid(),
         tool: TaskTool.id,
+        // Run by the user, not called by the model; Twigg receives it as prompt text, not as a tool result.
+        metadata: { userExecuted: true },
         state: {
           status: "running",
           input: {
@@ -528,6 +530,7 @@ const layer = Layer.effect(
               sessionID: input.sessionID,
               tool: ShellID.ToolID,
               callID: ulid(),
+              metadata: { userExecuted: true },
               state: {
                 status: "running",
                 time: { start: started },
